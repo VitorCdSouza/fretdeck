@@ -94,6 +94,11 @@ func (s *Song) Wound(number int) bool {
 	return float64(number) > float64(len(s.Tuning))/2
 }
 
+// Label names the string for a neck drawn from another song's tuning.
+func (s *String) Label(owner *Song) string {
+	return owner.Label(s.Number)
+}
+
 // Label is the letter shown at the left of each line of the tab.
 func (s *Song) Label(number int) string {
 	for _, str := range s.Tuning {

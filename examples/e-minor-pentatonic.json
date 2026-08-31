@@ -1,0 +1,303 @@
+{
+ "title": "E minor pentatonic, box one",
+ "artist": "exercise",
+ "track": "Guitar",
+ "tempo": 60.0,
+ "tuning": [
+  {
+   "string": 1,
+   "midi": 64
+  },
+  {
+   "string": 2,
+   "midi": 59
+  },
+  {
+   "string": 3,
+   "midi": 55
+  },
+  {
+   "string": 4,
+   "midi": 50
+  },
+  {
+   "string": 5,
+   "midi": 45
+  },
+  {
+   "string": 6,
+   "midi": 40
+  }
+ ],
+ "measures": [
+  {
+   "index": 1,
+   "beat": 0.0,
+   "time": 0.0,
+   "tempo": 60.0,
+   "signature": [
+    4,
+    4
+   ]
+  },
+  {
+   "index": 2,
+   "beat": 4.0,
+   "time": 4.0,
+   "tempo": 60.0,
+   "signature": [
+    4,
+    4
+   ]
+  },
+  {
+   "index": 3,
+   "beat": 8.0,
+   "time": 8.0,
+   "tempo": 60.0,
+   "signature": [
+    4,
+    4
+   ]
+  },
+  {
+   "index": 4,
+   "beat": 12.0,
+   "time": 12.0,
+   "tempo": 60.0,
+   "signature": [
+    4,
+    4
+   ]
+  },
+  {
+   "index": 5,
+   "beat": 16.0,
+   "time": 16.0,
+   "tempo": 60.0,
+   "signature": [
+    4,
+    4
+   ]
+  },
+  {
+   "index": 6,
+   "beat": 20.0,
+   "time": 20.0,
+   "tempo": 60.0,
+   "signature": [
+    4,
+    4
+   ]
+  }
+ ],
+ "notes": [
+  {
+   "measure": 1,
+   "beat": 0.0,
+   "time": 0.0,
+   "dur": 1.0,
+   "string": 6,
+   "fret": 0,
+   "midi": 40
+  },
+  {
+   "measure": 1,
+   "beat": 1.0,
+   "time": 1.0,
+   "dur": 1.0,
+   "string": 6,
+   "fret": 3,
+   "midi": 43
+  },
+  {
+   "measure": 1,
+   "beat": 2.0,
+   "time": 2.0,
+   "dur": 1.0,
+   "string": 5,
+   "fret": 0,
+   "midi": 45
+  },
+  {
+   "measure": 1,
+   "beat": 3.0,
+   "time": 3.0,
+   "dur": 1.0,
+   "string": 5,
+   "fret": 2,
+   "midi": 47
+  },
+  {
+   "measure": 2,
+   "beat": 4.0,
+   "time": 4.0,
+   "dur": 1.0,
+   "string": 4,
+   "fret": 0,
+   "midi": 50
+  },
+  {
+   "measure": 2,
+   "beat": 5.0,
+   "time": 5.0,
+   "dur": 1.0,
+   "string": 4,
+   "fret": 2,
+   "midi": 52
+  },
+  {
+   "measure": 2,
+   "beat": 6.0,
+   "time": 6.0,
+   "dur": 1.0,
+   "string": 3,
+   "fret": 0,
+   "midi": 55
+  },
+  {
+   "measure": 2,
+   "beat": 7.0,
+   "time": 7.0,
+   "dur": 1.0,
+   "string": 3,
+   "fret": 2,
+   "midi": 57
+  },
+  {
+   "measure": 3,
+   "beat": 8.0,
+   "time": 8.0,
+   "dur": 1.0,
+   "string": 2,
+   "fret": 0,
+   "midi": 59
+  },
+  {
+   "measure": 3,
+   "beat": 9.0,
+   "time": 9.0,
+   "dur": 1.0,
+   "string": 2,
+   "fret": 3,
+   "midi": 62
+  },
+  {
+   "measure": 3,
+   "beat": 10.0,
+   "time": 10.0,
+   "dur": 1.0,
+   "string": 1,
+   "fret": 0,
+   "midi": 64
+  },
+  {
+   "measure": 3,
+   "beat": 11.0,
+   "time": 11.0,
+   "dur": 1.0,
+   "string": 1,
+   "fret": 3,
+   "midi": 67
+  },
+  {
+   "measure": 4,
+   "beat": 12.0,
+   "time": 12.0,
+   "dur": 1.0,
+   "string": 1,
+   "fret": 0,
+   "midi": 64
+  },
+  {
+   "measure": 4,
+   "beat": 13.0,
+   "time": 13.0,
+   "dur": 1.0,
+   "string": 2,
+   "fret": 3,
+   "midi": 62
+  },
+  {
+   "measure": 4,
+   "beat": 14.0,
+   "time": 14.0,
+   "dur": 1.0,
+   "string": 2,
+   "fret": 0,
+   "midi": 59
+  },
+  {
+   "measure": 4,
+   "beat": 15.0,
+   "time": 15.0,
+   "dur": 1.0,
+   "string": 3,
+   "fret": 2,
+   "midi": 57
+  },
+  {
+   "measure": 5,
+   "beat": 16.0,
+   "time": 16.0,
+   "dur": 1.0,
+   "string": 3,
+   "fret": 0,
+   "midi": 55
+  },
+  {
+   "measure": 5,
+   "beat": 17.0,
+   "time": 17.0,
+   "dur": 1.0,
+   "string": 4,
+   "fret": 2,
+   "midi": 52
+  },
+  {
+   "measure": 5,
+   "beat": 18.0,
+   "time": 18.0,
+   "dur": 1.0,
+   "string": 4,
+   "fret": 0,
+   "midi": 50
+  },
+  {
+   "measure": 5,
+   "beat": 19.0,
+   "time": 19.0,
+   "dur": 1.0,
+   "string": 5,
+   "fret": 2,
+   "midi": 47
+  },
+  {
+   "measure": 6,
+   "beat": 20.0,
+   "time": 20.0,
+   "dur": 1.0,
+   "string": 5,
+   "fret": 0,
+   "midi": 45
+  },
+  {
+   "measure": 6,
+   "beat": 21.0,
+   "time": 21.0,
+   "dur": 1.0,
+   "string": 6,
+   "fret": 3,
+   "midi": 43
+  },
+  {
+   "measure": 6,
+   "beat": 22.0,
+   "time": 22.0,
+   "dur": 1.0,
+   "string": 6,
+   "fret": 0,
+   "midi": 40
+  }
+ ]
+}

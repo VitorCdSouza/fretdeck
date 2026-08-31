@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/VitorCdSouza/fretdeck/internal/scripts"
 )
@@ -82,8 +83,15 @@ type MissingError struct {
 	Output string
 }
 
+// Error keeps the last line of the traceback and drops the rest. The frames
+// are about a one line import and say nothing the name of the module does not.
 func (e *MissingError) Error() string {
-	return "the python side cannot start: " + e.Output
+	lines := strings.Split(strings.TrimSpace(e.Output), "\n")
+	last := lines[len(lines)-1]
+	if last == "" {
+		last = "the interpreter said nothing"
+	}
+	return "the python side cannot start: " + strings.TrimSpace(last)
 }
 
 // dir is unpacked once and reused, since the hash makes the path stable.
