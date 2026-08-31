@@ -13,9 +13,10 @@ import (
 	"github.com/VitorCdSouza/fretdeck/internal/song"
 )
 
-// key routes a keystroke. The text field takes the whole keyboard while it is
-// focused, apart from the two keys that close it, or typing a path would
-// switch screens on every letter that happens to be a digit.
+// Movement is vim everywhere: j down, k up, h back or left, l in or right, gg
+// and G for the ends. The keys that do something particular to a screen are
+// letters that say what they do, and all of them are on the screen, in the bar
+// at the bottom and in full behind the question mark.
 func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 	if msg.Type == tea.KeyCtrlC {
 		return tea.Quit
@@ -23,36 +24,161 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 
 	m.fail = ""
 
+	// the help is a mode of the whole app, and anything at all leaves it
+	if m.helping {
+		m.helping = false
+		return nil
+	}
+
 	if m.input.Focused() {
 		return m.typing(msg)
 	}
 
-	switch msg.String() {
+	key := msg.String()
+
+	// gg is two keys, so the first is remembered and anything else forgets it
+	if m.pendingG {
+		m.pendingG = false
+		if key == "g" {
+			m.jump(-1)
+			return nil
+		}
+	}
+
+	switch key {
+	case "?":
+		m.helping = true
+		return nil
 	case "q":
 		return tea.Quit
-	case "tab":
+	case "g":
+		m.pendingG = true
+		return nil
+	case "G":
+		m.jump(1)
+		return nil
+	case "L", "tab":
 		m.goTo(screen((int(m.screen) + 1) % len(screenNames)))
 		return nil
-	case "shift+tab":
+	case "H", "shift+tab":
 		m.goTo(screen((int(m.screen) + len(screenNames) - 1) % len(screenNames)))
 		return nil
-	case "1", "2", "3", "4", "5":
-		m.goTo(screen(int(msg.String()[0] - '1')))
+	case "1", "2", "3", "4", "5", "6":
+		m.goTo(screen(int(key[0] - '1')))
+		return nil
+	case "j", "down":
+		m.move(1)
+		return nil
+	case "k", "up":
+		m.move(-1)
 		return nil
 	}
 
 	switch m.screen {
 	case screenLibrary:
-		return m.keyLibrary(msg)
+		return m.keyLibrary(key)
+	case screenSearch:
+		return m.keySearch(key)
 	case screenPractice:
-		return m.keyPractice(msg)
+		return m.keyPractice(key)
 	case screenAnalyze:
-		return m.keyAnalyze(msg)
+		return m.keyAnalyze(key)
 	case screenSetup:
-		return m.keySetup(msg)
+		return m.keySetup(key)
 	}
 
 	return nil
+}
+
+// move is j and k on whatever list the screen is showing. Every screen has one
+// cursor at most, so the movement lives here instead of five times over.
+func (m *Model) move(delta int) {
+	switch m.screen {
+	case screenLibrary:
+		if m.tracks != nil {
+			m.track = clamp(m.track+delta, len(m.tracks))
+			return
+		}
+		m.pick = clamp(m.pick+delta, len(m.filtered()))
+	case screenSearch:
+		m.found = clamp(m.found+delta, len(m.results))
+	case screenAnalyze:
+		m.reportRow = clamp(m.reportRow+delta, m.problemCount())
+	case screenSetup:
+		m.device = clamp(m.device+delta, len(m.devices))
+	case screenPractice:
+		if m.engine == nil {
+			return
+		}
+		// up and down on a tab means the note before and the note after, since
+		// there is nothing else to move through
+		m.engine.Stop()
+		m.engine.Seek(m.engine.Cursor() + delta)
+	}
+}
+
+// jump is gg and G, the two ends of the same list.
+func (m *Model) jump(direction int) {
+	last := 0
+	switch m.screen {
+	case screenLibrary:
+		if m.tracks != nil {
+			last = len(m.tracks) - 1
+		} else {
+			last = len(m.filtered()) - 1
+		}
+	case screenSearch:
+		last = len(m.results) - 1
+	case screenAnalyze:
+		last = m.problemCount() - 1
+	case screenSetup:
+		last = len(m.devices) - 1
+	case screenPractice:
+		if m.engine == nil {
+			return
+		}
+		m.engine.Stop()
+		if direction < 0 {
+			m.engine.Seek(0)
+			return
+		}
+		m.engine.Seek(len(m.engine.Events) - 1)
+		return
+	}
+
+	if last < 0 {
+		last = 0
+	}
+
+	target := 0
+	if direction > 0 {
+		target = last
+	}
+
+	switch m.screen {
+	case screenLibrary:
+		if m.tracks != nil {
+			m.track = target
+			return
+		}
+		m.pick = target
+	case screenSearch:
+		m.found = target
+	case screenAnalyze:
+		m.reportRow = target
+	case screenSetup:
+		m.device = target
+	}
+}
+
+func clamp(value, length int) int {
+	if value < 0 || length == 0 {
+		return 0
+	}
+	if value >= length {
+		return length - 1
+	}
+	return value
 }
 
 func (m *Model) goTo(next screen) {
@@ -65,35 +191,69 @@ func (m *Model) goTo(next screen) {
 	m.status = ""
 }
 
+// ask opens the one text field of the app for a particular question.
+func (m *Model) ask(what asking, placeholder, value string) tea.Cmd {
+	m.asking = what
+	m.input.Placeholder = placeholder
+	m.input.SetValue(value)
+	m.input.CursorEnd()
+	m.input.Focus()
+	return textinputBlink()
+}
+
 func (m *Model) typing(msg tea.KeyMsg) tea.Cmd {
+	// the filter reads as you type, or it would be a dialog and not a filter
+	if m.asking == askingFilter {
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.filter = ""
+			m.closeInput()
+			return nil
+		case tea.KeyEnter:
+			m.closeInput()
+			return nil
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.filter = m.input.Value()
+		m.pick = clamp(m.pick, len(m.filtered()))
+		return cmd
+	}
+
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.input.Blur()
-		m.input.SetValue("")
-		m.asking = askingNothing
+		m.closeInput()
 		return nil
 
 	case tea.KeyEnter:
-		path := expand(m.input.Value())
+		value := strings.TrimSpace(m.input.Value())
 		asked := m.asking
-		m.input.Blur()
-		m.input.SetValue("")
-		m.asking = askingNothing
+		m.closeInput()
 
-		if path == "" {
-			return nil
-		}
-		if _, err := os.Stat(path); err != nil {
-			m.fail = err.Error()
+		if value == "" {
 			return nil
 		}
 
 		switch asked {
-		case askingImport:
-			m.pending = path
-			m.status = "reading " + filepath.Base(path)
-			return m.run("gpimport.py", path)
-		case askingRecording:
+		case askingQuery:
+			m.query = value
+			m.results = nil
+			m.found = 0
+			m.seeking = true
+			m.status = "searching songsterr for " + value
+			return m.searchSongsterr(value)
+
+		case askingImport, askingRecording:
+			path := expand(value)
+			if _, err := os.Stat(path); err != nil {
+				m.fail = err.Error()
+				return nil
+			}
+			if asked == askingImport {
+				m.pending = path
+				m.status = "reading " + filepath.Base(path)
+				return m.run("gpimport.py", path)
+			}
 			if m.current == nil {
 				m.fail = "pick a song on the library screen first"
 				return nil
@@ -112,29 +272,35 @@ func (m *Model) typing(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
-func (m *Model) keyLibrary(msg tea.KeyMsg) tea.Cmd {
-	// the track list of a guitar pro file is a question, and while it is open
-	// it owns the arrows
+func (m *Model) closeInput() {
+	m.input.Blur()
+	m.input.SetValue("")
+	m.asking = askingNothing
+}
+
+func (m *Model) keyLibrary(key string) tea.Cmd {
 	if m.tracks != nil {
-		return m.keyTracks(msg)
+		switch key {
+		case "l", "enter":
+			return m.importTrack()
+		case "h", "esc":
+			m.tracks = nil
+		}
+		return nil
 	}
 
-	switch msg.String() {
-	case "up", "k":
-		if m.pick > 0 {
-			m.pick--
-		}
-	case "down", "j":
-		if m.pick < len(m.songs)-1 {
-			m.pick++
-		}
-	case "enter":
+	switch key {
+	case "l", "enter":
 		return m.openSong()
+	case "/":
+		return m.ask(askingFilter, "filter the library", m.filter)
+	case "h", "esc":
+		if m.filter != "" {
+			m.filter = ""
+			m.pick = 0
+		}
 	case "i":
-		m.asking = askingImport
-		m.input.Placeholder = "path to a .gp3, .gp4, .gp5 or .gpx file"
-		m.input.Focus()
-		return textinputBlink()
+		return m.ask(askingImport, "path to a .gp3, .gp4, .gp5 or .gpx file", "")
 	case "r":
 		return m.loadSongs()
 	case "d":
@@ -144,38 +310,50 @@ func (m *Model) keyLibrary(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) keyTracks(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "up", "k":
-		if m.track > 0 {
-			m.track--
-		}
-	case "down", "j":
-		if m.track < len(m.tracks)-1 {
-			m.track++
-		}
-	case "esc":
-		m.tracks = nil
-	case "enter":
-		chosen := m.tracks[m.track]
-		if !chosen.Playable {
-			m.fail = "that track has no strings, so there is no tab to draw"
-			return nil
-		}
-		out := filepath.Join(m.cfg.Library, slug(filepath.Base(m.pending), chosen.Name)+".json")
-		m.status = "importing " + chosen.Name
-		return m.run("gpimport.py", m.pending, "--track", fmt.Sprint(chosen.Index), "--out", out)
-	}
-
-	return nil
-}
-
-func (m *Model) openSong() tea.Cmd {
-	if m.pick >= len(m.songs) {
+func (m *Model) importTrack() tea.Cmd {
+	if m.track >= len(m.tracks) {
 		return nil
 	}
 
-	m.current = m.songs[m.pick]
+	chosen := m.tracks[m.track]
+	if !chosen.Playable {
+		m.fail = "that track has no strings, so there is no tab to draw"
+		return nil
+	}
+
+	out := filepath.Join(m.cfg.Library, slug(filepath.Base(m.pending), chosen.Name)+".json")
+	m.status = "importing " + chosen.Name
+
+	return m.run("gpimport.py", m.pending, "--track", fmt.Sprint(chosen.Index), "--out", out)
+}
+
+// filtered is the library narrowed by whatever was typed after the slash. The
+// match is over the title, the artist and the track, since all three are on the
+// row and any of them is a reasonable thing to type.
+func (m *Model) filtered() []*song.Song {
+	if m.filter == "" {
+		return m.songs
+	}
+
+	needle := strings.ToLower(m.filter)
+	var kept []*song.Song
+	for _, item := range m.songs {
+		haystack := strings.ToLower(item.Title + " " + item.Artist + " " + item.Track)
+		if strings.Contains(haystack, needle) {
+			kept = append(kept, item)
+		}
+	}
+
+	return kept
+}
+
+func (m *Model) openSong() tea.Cmd {
+	list := m.filtered()
+	if m.pick >= len(list) {
+		return nil
+	}
+
+	m.current = list[m.pick]
 	m.engine = practice.New(m.current, practice.Wait)
 	m.engine.Speed = m.cfg.Speed
 	m.tab = song.NewTab(m.current, m.engine.Events)
@@ -186,11 +364,12 @@ func (m *Model) openSong() tea.Cmd {
 }
 
 func (m *Model) deleteSong() tea.Cmd {
-	if m.pick >= len(m.songs) {
+	list := m.filtered()
+	if m.pick >= len(list) {
 		return nil
 	}
 
-	path := m.songs[m.pick].Path
+	path := list[m.pick].Path
 	if err := os.Remove(path); err != nil {
 		m.fail = err.Error()
 		return nil
@@ -203,12 +382,15 @@ func (m *Model) deleteSong() tea.Cmd {
 	return m.loadSongs()
 }
 
-func (m *Model) keyPractice(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) keyPractice(key string) tea.Cmd {
 	if m.engine == nil {
 		return nil
 	}
 
-	switch msg.String() {
+	switch key {
+	case "v":
+		m.highway = !m.highway
+
 	case " ":
 		// wait mode has no clock to start, and saying stopped there would be
 		// answering a question nobody asked
@@ -237,10 +419,10 @@ func (m *Model) keyPractice(msg tea.KeyMsg) tea.Cmd {
 		m.engine.Reset()
 		m.status = ""
 
-	case "left", "h":
+	case "h", "left":
 		m.engine.Stop()
 		m.engine.Seek(m.engine.Cursor() - 1)
-	case "right", "l":
+	case "l", "right":
 		m.engine.Stop()
 		m.engine.Seek(m.engine.Cursor() + 1)
 
@@ -302,42 +484,20 @@ func (m *Model) setSpeed(speed float64) {
 	_ = m.cfg.Save()
 }
 
-func (m *Model) keyAnalyze(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "a":
+func (m *Model) keyAnalyze(key string) tea.Cmd {
+	if key == "a" {
 		if m.current == nil {
 			m.fail = "pick a song on the library screen first"
 			return nil
 		}
-		m.asking = askingRecording
-		m.input.Placeholder = "path to a recording of you playing it"
-		m.input.Focus()
-		return textinputBlink()
-
-	case "up", "k":
-		if m.reportRow > 0 {
-			m.reportRow--
-		}
-	case "down", "j":
-		if m.report != nil && m.reportRow < len(m.report.Notes)-1 {
-			m.reportRow++
-		}
+		return m.ask(askingRecording, "path to a recording of you playing it", "")
 	}
-
 	return nil
 }
 
-func (m *Model) keySetup(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "up", "k":
-		if m.device > 0 {
-			m.device--
-		}
-	case "down", "j":
-		if m.device < len(m.devices)-1 {
-			m.device++
-		}
-	case "enter":
+func (m *Model) keySetup(key string) tea.Cmd {
+	switch key {
+	case "l", "enter":
 		if m.device >= len(m.devices) {
 			return nil
 		}
@@ -350,36 +510,13 @@ func (m *Model) keySetup(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.status = "input is " + chosen.Name
 		return m.listen()
+
+	case "s":
+		m.status = "opening the spotify login in your browser"
+		return m.spotify("login")
 	}
 
 	return nil
-}
-
-// keyHints is the line at the bottom. It says what this screen does, not what
-// every screen does, since the tab key is on all of them and saying so five
-// times helps nobody.
-func (m *Model) keyHints() string {
-	if m.input.Focused() {
-		return "enter  confirm    esc  cancel"
-	}
-
-	switch m.screen {
-	case screenLibrary:
-		if m.tracks != nil {
-			return "↑↓  track    enter  import    esc  cancel"
-		}
-		return "↑↓  song    enter  practice    i  import guitar pro    d  remove    r  reload"
-	case screenPractice:
-		return "space  run    m  mode    ←→  note    []  measure    +-  speed    r  restart    esc  library"
-	case screenTuner:
-		return "play an open string"
-	case screenAnalyze:
-		return "a  pick a recording    ↑↓  scroll"
-	case screenSetup:
-		return "↑↓  device    enter  use it"
-	}
-
-	return ""
 }
 
 // slug names the imported file after the guitar pro file and the track, so two

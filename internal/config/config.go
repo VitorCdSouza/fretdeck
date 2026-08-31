@@ -22,6 +22,20 @@ type Config struct {
 
 	// Speed is the tempo multiplier the practice screen opens with
 	Speed float64 `json:"speed"`
+
+	// Downloads is watched after a tab is opened in the browser, so the file
+	// lands in the library without anybody having to type where it went
+	Downloads string `json:"downloads"`
+}
+
+// Credentials is where the spotify login is kept. It is written by librespot
+// and never read here, which is why it is only a path.
+func Credentials() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "spotify.json"), nil
 }
 
 func Dir() (string, error) {
@@ -39,11 +53,12 @@ func Dir() (string, error) {
 }
 
 func defaults() Config {
-	library := "songs"
+	library, downloads := "songs", "."
 	if home, err := os.UserHomeDir(); err == nil {
 		library = filepath.Join(home, "fretdeck", "songs")
+		downloads = filepath.Join(home, "Downloads")
 	}
-	return Config{Device: -1, Rate: 44100, Library: library, Speed: 1}
+	return Config{Device: -1, Rate: 44100, Library: library, Speed: 1, Downloads: downloads}
 }
 
 func Load() Config {
@@ -70,6 +85,9 @@ func Load() Config {
 	}
 	if loaded.Library == "" {
 		loaded.Library = defaults().Library
+	}
+	if loaded.Downloads == "" {
+		loaded.Downloads = defaults().Downloads
 	}
 
 	return loaded

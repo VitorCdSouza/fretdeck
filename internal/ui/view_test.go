@@ -68,7 +68,8 @@ func TestEveryScreenFitsItsWindow(t *testing.T) {
 	m := model(t)
 	m.engine.Heard(44, time.Now())
 
-	for _, which := range []screen{screenLibrary, screenPractice, screenTuner, screenAnalyze, screenSetup} {
+	for index := range screenNames {
+		which := screen(index)
 		m.screen = which
 		lines := strings.Split(m.View(), "\n")
 		if len(lines) > m.height {
@@ -79,6 +80,97 @@ func TestEveryScreenFitsItsWindow(t *testing.T) {
 				t.Fatalf("%s line %d is %d cells wide, the window is %d", screenNames[which], index, width, m.width)
 			}
 		}
+	}
+}
+
+// TestTheHelpAndTheHighwayFitTheWindowToo covers the two views that are not a
+// screen of their own and so are missed by the loop above.
+func TestTheHelpAndTheHighwayFitTheWindowToo(t *testing.T) {
+	m := model(t)
+
+	m.screen = screenPractice
+	m.highway = true
+	mustFit(t, m, "highway")
+
+	m.highway = false
+	m.helping = true
+	mustFit(t, m, "help")
+}
+
+func mustFit(t *testing.T, m *Model, what string) {
+	t.Helper()
+
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) > m.height {
+		t.Fatalf("%s draws %d lines into a window of %d", what, len(lines), m.height)
+	}
+	for index, line := range lines {
+		if width := lipgloss.Width(line); width > m.width {
+			t.Fatalf("%s line %d is %d cells wide, the window is %d", what, index, width, m.width)
+		}
+	}
+}
+
+// TestFilterNarrowsTheLibrary is the slash key. It matches over the three
+// things on the row, since any of them is a reasonable thing to type.
+func TestFilterNarrowsTheLibrary(t *testing.T) {
+	m := model(t)
+	m.songs = append(m.songs, &song.Song{Title: "Another One", Artist: "Somebody", Track: "Bass"})
+
+	for _, needle := range []string{"test", "NOBODY", "guitar 1"} {
+		m.filter = needle
+		if got := len(m.filtered()); got != 1 {
+			t.Fatalf("filter %q kept %d songs, want the one", needle, got)
+		}
+	}
+
+	m.filter = "nothing like this"
+	if got := len(m.filtered()); got != 0 {
+		t.Fatalf("want an empty list, got %d", got)
+	}
+}
+
+// TestMovementIsVimOnEveryList is the promise the help makes.
+func TestMovementIsVimOnEveryList(t *testing.T) {
+	m := model(t)
+	m.screen = screenSearch
+	m.results = []finding{{Title: "one"}, {Title: "two"}, {Title: "three"}}
+
+	m.move(1)
+	if m.found != 1 {
+		t.Fatalf("j did not move down, cursor is %d", m.found)
+	}
+
+	m.jump(1)
+	if m.found != 2 {
+		t.Fatalf("G did not land on the last row, cursor is %d", m.found)
+	}
+
+	m.jump(-1)
+	if m.found != 0 {
+		t.Fatalf("gg did not land on the first row, cursor is %d", m.found)
+	}
+
+	// past the end stays on the end rather than wrapping, which is what a
+	// held down key would otherwise do
+	m.found = 2
+	m.move(1)
+	if m.found != 2 {
+		t.Fatalf("j past the end moved to %d", m.found)
+	}
+}
+
+// TestMovingOnAnEmptyListIsNotACrash is the state the app opens in.
+func TestMovingOnAnEmptyListIsNotACrash(t *testing.T) {
+	m := model(t)
+	m.songs = nil
+	m.screen = screenLibrary
+
+	m.move(1)
+	m.jump(1)
+
+	if m.pick != 0 {
+		t.Fatalf("want the cursor at zero, got %d", m.pick)
 	}
 }
 

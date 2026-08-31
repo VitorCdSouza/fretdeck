@@ -20,13 +20,23 @@ func (m *Model) viewPractice() string {
 		return "\n" + styleSubtle.Render("  Pick a song on the library screen.") + blank(m.space()-2)
 	}
 
+	lines := []string{"", m.practiceHead(), ""}
+
+	if m.highway {
+		// the board takes what is left after the head, the callout and the
+		// progress line, since a taller board is a longer warning
+		lines = append(lines, m.viewHighway(m.space()-len(lines)-5)...)
+		lines = append(lines, "", m.callout()+m.highwayFoot())
+		filler := m.space() - len(lines) - 1
+		return strings.Join(lines, "\n") + blank(filler) + "\n" + m.progressLine()
+	}
+
 	width := m.width - tabIndent - 2
 	if width < 10 {
 		width = 10
 	}
 
 	view := m.tab.View(m.engine.Cursor(), width)
-	lines := []string{"", m.practiceHead(), ""}
 	lines = append(lines, m.marker(view), styleFaint.Render(strings.Repeat(" ", tabIndent)+view.Header))
 
 	for _, row := range view.Rows {
@@ -56,7 +66,12 @@ func (m *Model) practiceHead() string {
 		title += styleFaint.Render("  ·  ") + styleSubtle.Render(m.current.Track)
 	}
 
-	mode := styleAccent.Render(m.engine.Mode.String())
+	view := styleFaint.Render("tab")
+	if m.highway {
+		view = styleFaint.Render("highway")
+	}
+
+	mode := view + styleFaint.Render("   ") + styleAccent.Render(m.engine.Mode.String())
 	if m.engine.Mode == practice.Tempo {
 		mode += styleFaint.Render(fmt.Sprintf("  %.0f%%", m.engine.Speed*100))
 	}

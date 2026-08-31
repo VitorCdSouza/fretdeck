@@ -15,10 +15,10 @@ import (
 	"sort"
 )
 
-// the four are named one by one on purpose: a glob would carry the tests into
+// the scripts are named one by one on purpose: a glob would carry the tests into
 // the binary and change the hash of the folder every time one of them is edited
 //
-//go:embed pitch.py worker.py gpimport.py analyze.py
+//go:embed pitch.py worker.py gpimport.py analyze.py spotify.py
 var files embed.FS
 
 // Unpack writes the scripts under the user cache folder and answers where.

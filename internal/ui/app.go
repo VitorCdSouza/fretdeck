@@ -16,19 +16,21 @@ import (
 	"github.com/VitorCdSouza/fretdeck/internal/config"
 	"github.com/VitorCdSouza/fretdeck/internal/practice"
 	"github.com/VitorCdSouza/fretdeck/internal/song"
+	"github.com/VitorCdSouza/fretdeck/internal/songsterr"
 )
 
 type screen int
 
 const (
 	screenLibrary screen = iota
+	screenSearch
 	screenPractice
 	screenTuner
 	screenAnalyze
 	screenSetup
 )
 
-var screenNames = []string{"library", "practice", "tuner", "analyze", "setup"}
+var screenNames = []string{"library", "search", "practice", "tuner", "analyze", "setup"}
 
 // frame is how often the clock and the animations are redrawn. Twenty five a
 // second is smooth and is already faster than the twenty levels a second the
@@ -59,9 +61,36 @@ type Model struct {
 	pick    int
 	current *song.Song
 
+	// filter is the vim style search over the library, kept apart from the
+	// songsterr one so leaving the screen does not lose either
+	filter string
+
+	// helping puts the key map over whatever screen is open. It is a mode of
+	// the whole app rather than of one screen, since the map is too
+	helping bool
+
+	// pendingG is the first half of gg. Vim has a two key motion and so does
+	// this, and the state has to live somewhere
+	pendingG bool
+
 	engine *practice.Engine
 	tab    *song.Tab
 	heard  notePayload
+
+	// highway is the guitar hero view of the same song. It is a way of
+	// drawing what the engine already knows, not a mode of its own
+	highway bool
+
+	// the search screen, over songsterr and over a spotify playlist
+	songsterr *songsterr.Client
+	query     string
+	results   []finding
+	found     int
+	seeking   bool
+	source    source
+	playlist  string
+	playlists []playlistInfo
+	lookups   chan lookupMsg
 
 	level   levelPayload
 	silence time.Time
@@ -88,6 +117,8 @@ const (
 	askingNothing asking = iota
 	askingImport
 	askingRecording
+	askingQuery
+	askingFilter
 )
 
 func New() *Model {
@@ -98,11 +129,13 @@ func New() *Model {
 	cfg := config.Load()
 
 	return &Model{
-		cfg:    cfg,
-		worker: bridge.NewWorker(),
-		events: make(chan bridge.Event, 256),
-		device: cfg.Device,
-		input:  input,
+		cfg:       cfg,
+		worker:    bridge.NewWorker(),
+		events:    make(chan bridge.Event, 256),
+		lookups:   make(chan lookupMsg, 256),
+		songsterr: songsterr.New(),
+		device:    cfg.Device,
+		input:     input,
 	}
 }
 
@@ -113,7 +146,7 @@ func (m *Model) Init() tea.Cmd {
 		_ = m.worker.Send(bridge.Command{Action: "devices"})
 	}
 
-	return tea.Batch(m.waitWorker(), m.waitOneshot(), m.loadSongs(), tick())
+	return tea.Batch(m.waitWorker(), m.waitOneshot(), m.waitLookup(), m.loadSongs(), tick())
 }
 
 // waitWorker and waitOneshot are two mouths feeding the same Update. The live
@@ -194,6 +227,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fail = msg.text
 		return m, nil
 
+	case searchMsg:
+		m.seeking = false
+		if msg.err != nil {
+			m.fail = msg.err.Error()
+			return m, nil
+		}
+		m.showSongs(msg.songs)
+		m.status = ""
+		return m, nil
+
+	case lookupMsg:
+		if msg.index < len(m.results) {
+			item := &m.results[msg.index]
+			item.State = lookupMissing
+			if msg.found {
+				item.State, item.Level, item.URL = lookupDone, msg.level, msg.url
+			}
+		}
+		if m.stillLooking() == 0 {
+			m.sortByLevel()
+			m.status = ""
+		}
+		return m, m.waitLookup()
+
+	case watchMsg:
+		return m, m.watched(msg)
+
 	case bridgeMsg:
 		return m, m.handle(bridge.Event(msg))
 
@@ -211,7 +271,9 @@ func (m *Model) handle(event bridge.Event) tea.Cmd {
 	next := m.waitWorker()
 	switch event.Event {
 	case bridge.EventTracks, bridge.EventImported, bridge.EventImportError,
-		bridge.EventProgress, bridge.EventReport, bridge.EventAnalyzeError:
+		bridge.EventProgress, bridge.EventReport, bridge.EventAnalyzeError,
+		bridge.EventSpotifyLog, bridge.EventSpotifyReady, bridge.EventSpotifyError,
+		bridge.EventSpotifyPlaylists, bridge.EventSpotifyTracks:
 		next = m.waitOneshot()
 	case bridge.EventLog:
 		// a log can come from either mouth, and asking the wrong one for the
@@ -269,6 +331,31 @@ func (m *Model) handle(event bridge.Event) tea.Cmd {
 		m.fail = event.Message
 		m.running = false
 		m.tracks = nil
+
+	case bridge.EventSpotifyReady:
+		m.status = "spotify connected"
+
+	case bridge.EventSpotifyLog:
+		m.status = event.Message
+
+	case bridge.EventSpotifyError:
+		m.seeking = false
+		m.fail = event.Message
+
+	case bridge.EventSpotifyPlaylists:
+		var payload playlistsPayload
+		if err := event.Decode(&payload); err == nil {
+			m.playlists = payload.Playlists
+			m.found = 0
+			m.seeking = false
+			m.status = ""
+		}
+
+	case bridge.EventSpotifyTracks:
+		var payload tracksPayload2
+		if err := event.Decode(&payload); err == nil {
+			return tea.Batch(next, m.showTracks(payload.Tracks))
+		}
 
 	case bridge.EventProgress:
 		var payload progressPayload
@@ -357,6 +444,74 @@ func expand(path string) string {
 	return filepath.Join(home, strings.TrimPrefix(path, "~"))
 }
 
+// showTracks turns a playlist into rows and sends every one of them off to be
+// looked up. Nothing is known about difficulty until songsterr answers.
+func (m *Model) showTracks(tracks []spotifyTrack) tea.Cmd {
+	m.seeking = false
+	m.results = make([]finding, 0, len(tracks))
+	for _, track := range tracks {
+		m.results = append(m.results, finding{
+			Artist: track.Artist,
+			Title:  track.Title,
+			State:  lookupWaiting,
+			Have:   m.owned(track.Artist, track.Title),
+		})
+	}
+	m.found = 0
+	m.status = fmt.Sprintf("looking %d up on songsterr", len(tracks))
+
+	return m.lookupTracks(tracks)
+}
+
+func (m *Model) stillLooking() int {
+	waiting := 0
+	for _, item := range m.results {
+		if item.State == lookupWaiting {
+			waiting++
+		}
+	}
+	return waiting
+}
+
+// watched keeps the poll going until a file shows up or the wait runs out. A
+// file that does show up is read for its tracks, and the library screen picks
+// up the question of which one to import.
+func (m *Model) watched(msg watchMsg) tea.Cmd {
+	if !msg.done {
+		return watchDownloads(msg.dir, msg.since, msg.deadline)
+	}
+	if msg.path == "" {
+		m.status = "stopped watching for a download"
+		return nil
+	}
+
+	m.pending = msg.path
+	m.screen = screenLibrary
+	m.status = "found " + filepath.Base(msg.path)
+
+	return m.run("gpimport.py", msg.path)
+}
+
+// problemCount is how many rows the analyze screen can scroll through, which
+// is only what went wrong.
+func (m *Model) problemCount() int {
+	if m.report == nil {
+		return 0
+	}
+
+	count := 0
+	for _, note := range m.report.Notes {
+		if note.Kind != "hit" {
+			count++
+		}
+	}
+	return count
+}
+
+func credentialsPath() (string, error) {
+	return config.Credentials()
+}
+
 func (m *Model) Close() {
 	m.worker.Close()
 }
@@ -366,10 +521,16 @@ func (m *Model) View() string {
 		return ""
 	}
 
+	if m.helping {
+		return strings.Join([]string{m.header(), m.viewHelp(), m.footer()}, "\n")
+	}
+
 	body := ""
 	switch m.screen {
 	case screenLibrary:
 		body = m.viewLibrary()
+	case screenSearch:
+		body = m.viewSearch()
 	case screenPractice:
 		body = m.viewPractice()
 	case screenTuner:
@@ -414,13 +575,13 @@ func (m *Model) footer() string {
 		return rule(m.width) + "\n" + styleBad.Render(truncate(m.fail, m.width))
 	}
 
-	keys := m.keyHints()
+	keys := m.bar()
 	if m.status == "" {
-		return rule(m.width) + "\n" + styleHelp.Render(truncate(keys, m.width))
+		return rule(m.width) + "\n" + truncate(keys, m.width)
 	}
 
 	return rule(m.width) + "\n" +
-		pad(styleHelp.Render(keys), styleSubtle.Render(truncate(m.status, m.width/2)), m.width)
+		pad(keys, styleSubtle.Render(truncate(m.status, m.width/2)), m.width)
 }
 
 // space is how many lines the body may use, once the two lines of the header

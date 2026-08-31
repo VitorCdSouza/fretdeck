@@ -34,6 +34,13 @@ out is the one on the screen.
   you get it right, which is what learning a passage looks like. **Tempo** runs
   the song at its own speed, at 25% to 150% of it, and marks every note against
   the instant it was written for.
+- **Or draws the same song as a highway**, six lanes with the notes coming at
+  you and a line at the bottom that is now. `v` swaps between the two: the
+  highway to play in time, the tab to learn a passage by heart.
+- **Searches songsterr** for a song, says how hard they call the guitar part,
+  and marks the ones already in your library.
+- **Reads a Spotify playlist**, or your liked songs, looks every track up and
+  sorts the lot from easiest to hardest.
 - **Draws the neck** under the tab, with the note to play as a dot on it. A tab
   says which fret; the neck says where the finger goes.
 - **Tunes**, off the same detector, with the deviation as a needle instead of a
@@ -63,6 +70,14 @@ If the audio libraries live in a virtualenv, point the app at its interpreter:
 FRETDECK_PYTHON=~/venv/bin/python ./fretdeck
 ```
 
+## Moving around
+
+Vim, everywhere. `j` down, `k` up, `h` back or left, `l` in or right, `gg` and
+`G` for the two ends of a list. `H` and `L` change screen and so do the number
+keys. `/` searches: the library on the library screen, songsterr on the search
+one. `?` puts the whole map on the screen, and the four keys that matter most
+are always on the bar at the bottom.
+
 ## Getting a song in
 
 Songs come from Guitar Pro files, `.gp3` through `.gpx`. It is the only kind of
@@ -72,6 +87,39 @@ tempo mode to mark against.
 Press `i` on the library screen and give it a path. It reads the tracks in the
 file, you pick one, and it writes a `.json` into `~/fretdeck/songs`. Nothing
 else is needed after that: the imported file is the whole song.
+
+### Finding one you do not have
+
+The search screen asks songsterr. It answers which songs have a tab, which
+instruments each was written for, and what they call the difficulty of the
+guitar part.
+
+**The file itself is not downloaded by the app, and cannot be.** Songsterr keeps
+the tab data in a bucket that answers `AccessDenied` to anything without a
+signed key, and exporting a Guitar Pro file is a paid feature of their site.
+Anything that claimed to fetch it here would be a lie or a scraper that breaks
+next week.
+
+So `enter` on a result opens its page in your browser. Download the file there,
+and the app takes over again: it watches your downloads folder for ten minutes,
+and the moment a `.gp*` lands it reads the tracks and asks which one you want.
+
+### From a Spotify playlist
+
+Connect once on the setup screen with `s`. It opens Spotify in your browser and
+keeps the session in the config folder. There is no app to register and no
+client id to paste anywhere: the login is librespot, which is also what hands
+out the access token.
+
+After that, `s` on the search screen lists your playlists, with the liked songs
+first. Open one and every track is looked up on songsterr, three at a time, and
+the list sorts itself from easiest to hardest with the ones you already have
+marked.
+
+A track only counts as found when the artist and the title both match, ignoring
+case, punctuation and the remaster note a streaming service leaves on a title.
+Taking the first result instead would answer for a cover or a live version, and
+report the difficulty of a transcription you were not asking about.
 
 There is an exercise in `examples/` to try it with before importing anything:
 
@@ -112,6 +160,7 @@ fretdeck/
 ├── internal/
 │   ├── song/           the song model and the tab drawing
 │   ├── practice/       the modes, the clock and the scoring
+│   ├── songsterr/      the search, and matching a streamed track to a tab
 │   ├── bridge/         talking to the python side
 │   ├── scripts/        the python side, embedded in the binary
 │   ├── config/         what survives between runs
@@ -121,6 +170,11 @@ fretdeck/
 
 The interface is Go with Bubble Tea. The audio is Python, because the parts
 that matter have no counterpart in Go: numpy for the arithmetic, PortAudio
-through `sounddevice` for the input and PyGuitarPro for reading a tab. The two
-talk over one json object per line, and the scripts are embedded in the binary
-and unpacked at startup, so the build runs from anywhere it is copied to.
+through `sounddevice` for the input and PyGuitarPro for reading a tab. Spotify
+is Python too, for the same reason: librespot has no Go port. The songsterr
+search is Go, because it is one GET returning json and running a process for
+every keystroke would be worse than the dependency it saves.
+
+The two sides talk over one json object per line, and the scripts are embedded
+in the binary and unpacked at startup, so the build runs from anywhere it is
+copied to.

@@ -175,19 +175,7 @@ func (e *Engine) Beat(now time.Time) float64 {
 	if elapsed < 0 {
 		elapsed = 0
 	}
-
-	tempo, start, beat := e.Song.Tempo, 0.0, 0.0
-	for _, measure := range e.Song.Measures {
-		if measure.Time > elapsed {
-			break
-		}
-		tempo, start, beat = measure.Tempo, measure.Time, measure.Beat
-	}
-	if tempo <= 0 {
-		tempo = 120
-	}
-
-	return beat + (elapsed-start)*tempo/60.0
+	return e.Song.BeatAt(elapsed)
 }
 
 // Pulse is where the clock is inside the bar: which pulse of the measure, and
@@ -196,13 +184,7 @@ func (e *Engine) Beat(now time.Time) float64 {
 func (e *Engine) Pulse(now time.Time) (int, int) {
 	beat := e.Beat(now)
 
-	measure := song.Measure{Beat: 0, Signature: [2]int{4, 4}}
-	for _, candidate := range e.Song.Measures {
-		if candidate.Beat > beat {
-			break
-		}
-		measure = candidate
-	}
+	measure := e.Song.MeasureAt(e.Elapsed(now).Seconds())
 
 	count, unit := measure.Signature[0], measure.Signature[1]
 	if count <= 0 {

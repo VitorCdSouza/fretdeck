@@ -137,6 +137,39 @@ func (s *Song) Events() []Event {
 	return events
 }
 
+// BeatAt turns a moment into a position in quarter notes.
+//
+// It is not one multiplication: a song may change tempo, so the answer is read
+// off the measure the moment falls in and counted from there.
+func (s *Song) BeatAt(seconds float64) float64 {
+	tempo, start, beat := s.Tempo, 0.0, 0.0
+	for _, measure := range s.Measures {
+		if measure.Time > seconds {
+			break
+		}
+		tempo, start, beat = measure.Tempo, measure.Time, measure.Beat
+	}
+
+	if tempo <= 0 {
+		tempo = 120
+	}
+
+	return beat + (seconds-start)*tempo/60.0
+}
+
+// MeasureAt is the measure a moment falls in, and the beat that measure starts
+// on, which is what a bar line needs to draw itself.
+func (s *Song) MeasureAt(seconds float64) Measure {
+	found := Measure{Index: 1, Signature: [2]int{4, 4}, Tempo: s.Tempo}
+	for _, measure := range s.Measures {
+		if measure.Time > seconds {
+			break
+		}
+		found = measure
+	}
+	return found
+}
+
 // Duration is where the last note stops ringing.
 func (s *Song) Duration() float64 {
 	var end float64

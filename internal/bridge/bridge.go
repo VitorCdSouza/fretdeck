@@ -42,6 +42,12 @@ const (
 	EventProgress     = "progress"
 	EventReport       = "report"
 	EventAnalyzeError = "analyze_error"
+
+	EventSpotifyLog       = "spotify_log"
+	EventSpotifyReady     = "spotify_ready"
+	EventSpotifyPlaylists = "spotify_playlists"
+	EventSpotifyTracks    = "spotify_tracks"
+	EventSpotifyError     = "spotify_error"
 )
 
 // Command is what goes into the stdin of the live worker.

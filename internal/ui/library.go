@@ -15,7 +15,7 @@ func textinputBlink() tea.Cmd { return textinput.Blink }
 
 func (m *Model) viewLibrary() string {
 	if m.asking == askingImport {
-		return m.viewAsk("Import a guitar pro file",
+		return m.viewAsk("Import a Guitar Pro file",
 			"The tab, the tempo and the tuning all come out of it. Anything the\n"+
 				"file does not carry, such as which take you are playing, is not asked for.")
 	}
@@ -26,13 +26,34 @@ func (m *Model) viewLibrary() string {
 		return m.viewEmpty()
 	}
 
-	lines := []string{"", m.sectionHead("LIBRARY", plural(len(m.songs), "song")), ""}
+	list := m.filtered()
+	lines := []string{"", m.sectionHead("LIBRARY", m.libraryCount(list)), ""}
 
-	for index, item := range m.songs {
+	if m.asking == askingFilter {
+		lines = append(lines, styleAccent.Render("  /")+m.input.View(), "")
+	} else if m.filter != "" {
+		lines = append(lines, "  "+styleFaint.Render("/")+styleSubtle.Render(m.filter)+
+			styleFaint.Render("   h clears it"), "")
+	}
+
+	if len(list) == 0 {
+		lines = append(lines, "  "+styleFaint.Render("nothing matches that"))
+	}
+
+	for index, item := range list {
 		lines = append(lines, m.songRow(item, index == m.pick))
 	}
 
 	return strings.Join(lines, "\n") + blank(m.space()-len(lines))
+}
+
+// libraryCount says how much of the library is on screen, and only mentions
+// the filter when one is on.
+func (m *Model) libraryCount(list []*song.Song) string {
+	if m.filter == "" {
+		return plural(len(m.songs), "song")
+	}
+	return fmt.Sprintf("%d of %s", len(list), plural(len(m.songs), "song"))
 }
 
 func (m *Model) songRow(item *song.Song, selected bool) string {
