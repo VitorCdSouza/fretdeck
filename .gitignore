@@ -1,0 +1,5 @@
+fretdeck
+/cmd/fretdeck/fretdeck
+__pycache__/
+*.pyc
+*.log
