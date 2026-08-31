@@ -135,3 +135,35 @@ func TestSeekMeasureLandsOnItsFirstNote(t *testing.T) {
 		t.Fatalf("want the first note of the measure, got %d", engine.Cursor())
 	}
 }
+
+func TestPulseCountsTheBarInItsOwnUnit(t *testing.T) {
+	loaded := riff()
+	loaded.Measures[0].Signature = [2]int{6, 8}
+	engine := New(loaded, Tempo)
+	origin := time.Now()
+	engine.Start(origin)
+
+	// at 120 bpm an eighth note is a quarter of a second, so three of them in
+	// is the fourth pulse of a bar that holds six
+	pulse, count := engine.Pulse(origin.Add(countIn).Add(750 * time.Millisecond))
+
+	if count != 6 {
+		t.Fatalf("a bar of six eight holds six pulses, got %d", count)
+	}
+	if pulse != 3 {
+		t.Fatalf("want the fourth pulse, got %d", pulse)
+	}
+}
+
+func TestPulseWrapsAtTheBarLine(t *testing.T) {
+	engine := New(riff(), Tempo)
+	origin := time.Now()
+	engine.Start(origin)
+
+	// four quarters at 120 bpm is two seconds, which is the next bar line
+	pulse, count := engine.Pulse(origin.Add(countIn).Add(2 * time.Second))
+
+	if count != 4 || pulse != 0 {
+		t.Fatalf("want the first pulse of four, got pulse %d of %d", pulse, count)
+	}
+}

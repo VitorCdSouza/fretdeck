@@ -190,6 +190,39 @@ func (e *Engine) Beat(now time.Time) float64 {
 	return beat + (elapsed-start)*tempo/60.0
 }
 
+// Pulse is where the clock is inside the bar: which pulse of the measure, and
+// how many the measure holds. It counts in the unit the signature is written
+// in, so a bar of six eight is six pulses and not three.
+func (e *Engine) Pulse(now time.Time) (int, int) {
+	beat := e.Beat(now)
+
+	measure := song.Measure{Beat: 0, Signature: [2]int{4, 4}}
+	for _, candidate := range e.Song.Measures {
+		if candidate.Beat > beat {
+			break
+		}
+		measure = candidate
+	}
+
+	count, unit := measure.Signature[0], measure.Signature[1]
+	if count <= 0 {
+		count = 4
+	}
+	if unit <= 0 {
+		unit = 4
+	}
+
+	// Beat counts in quarter notes, and one pulse of the signature is worth
+	// four over its denominator of them
+	length := 4.0 / float64(unit)
+	pulse := int((beat - measure.Beat) / length)
+	if pulse < 0 {
+		pulse = 0
+	}
+
+	return pulse % count, count
+}
+
 // Tick moves the clock in tempo mode and writes off the notes whose moment has
 // passed. It does nothing in wait mode, which has no moment to miss.
 func (e *Engine) Tick(now time.Time) {

@@ -210,6 +210,12 @@ func (m *Model) keyPractice(msg tea.KeyMsg) tea.Cmd {
 
 	switch msg.String() {
 	case " ":
+		// wait mode has no clock to start, and saying stopped there would be
+		// answering a question nobody asked
+		if m.engine.Mode == practice.Wait {
+			m.status = "wait mode has no clock, just play the note"
+			return nil
+		}
 		if m.engine.Running() {
 			m.engine.Stop()
 			m.status = "stopped"

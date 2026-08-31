@@ -62,7 +62,6 @@ type Model struct {
 	engine *practice.Engine
 	tab    *song.Tab
 	heard  notePayload
-	beat   int
 
 	level   levelPayload
 	silence time.Time

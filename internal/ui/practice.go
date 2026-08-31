@@ -155,21 +155,37 @@ func (m *Model) callout() string {
 }
 
 func (m *Model) progressLine() string {
-	width := m.width - 4
-	line := "  " + bar(m.engine.Progress(), width, styleAccent)
+	metronome := m.metronome()
+	width := m.width - 4 - lipgloss.Width(metronome)
 
+	return "  " + metronome + bar(m.engine.Progress(), width, styleAccent)
+}
+
+// metronome counts the bar on the screen. It cannot count it out loud: the
+// microphone is open, and anything coming out of the speakers would be heard
+// as a note.
+func (m *Model) metronome() string {
 	if m.engine.Mode != practice.Tempo || !m.engine.Running() {
-		return line
+		return ""
 	}
 
-	// the metronome is a beat count, not a sound: nothing here can make noise
-	// while the microphone is open without being heard as a note
-	beat := int(m.engine.Beat(time.Now()))
-	if beat != m.beat {
-		m.beat = beat
+	now := time.Now()
+	pulse, count := m.engine.Pulse(now)
+	counting := m.engine.CountIn(now) > 0
+
+	dots := make([]string, count)
+	for index := range dots {
+		switch {
+		case counting:
+			dots[index] = styleFaint.Render("○")
+		case index == pulse:
+			dots[index] = styleAccent.Render("●")
+		default:
+			dots[index] = styleFaint.Render("○")
+		}
 	}
 
-	return line
+	return strings.Join(dots, " ") + "   "
 }
 
 // chordName is what to call the event out loud. One note is its name, a chord
