@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - run: go vet ./...
+      # gofmt writes nothing on a clean tree, so a name printed here is a file
+      # that was committed unformatted
+      - run: test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
+      - run: go test ./...
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # portaudio is not on the runner and sounddevice binds to it at import,
+      # so the audio side is checked for syntax and the rest is checked for real
+      - run: python -m compileall -q internal/scripts
+      - run: pip install numpy PyGuitarPro soundfile pytest
+      - run: python -m pytest internal/scripts -q

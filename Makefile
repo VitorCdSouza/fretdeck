@@ -12,16 +12,16 @@ build: ## compile the binary into the working directory
 run: ## build and open the interface
 	go run ./cmd/fretdeck
 
-test: ## go tests plus a syntax check of the python side
+test: ## go tests plus the python ones
 	go test ./...
-	$(PYTHON) -m compileall -q internal/scripts
+	$(PYTHON) -m pytest internal/scripts -q
 
 lint: ## vet and gofmt
 	go vet ./...
 	@test -z "$$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
 
-install-python: ## install what the audio side needs
-	$(PYTHON) -m pip install -r requirements.txt
+install-python: ## install what the audio side needs, tests included
+	$(PYTHON) -m pip install -r requirements.txt pytest
 
 clean:
 	rm -f $(BINARY)
