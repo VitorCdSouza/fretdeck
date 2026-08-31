@@ -1,0 +1,118 @@
+{
+ "title": "Test Riff",
+ "artist": "Nobody",
+ "track": "Guitar 1",
+ "tempo": 100.0,
+ "tuning": [
+  {
+   "string": 1,
+   "midi": 64
+  },
+  {
+   "string": 2,
+   "midi": 59
+  },
+  {
+   "string": 3,
+   "midi": 55
+  },
+  {
+   "string": 4,
+   "midi": 50
+  },
+  {
+   "string": 5,
+   "midi": 45
+  },
+  {
+   "string": 6,
+   "midi": 40
+  }
+ ],
+ "measures": [
+  {
+   "index": 1,
+   "beat": 0.0,
+   "time": 0.0,
+   "tempo": 100.0,
+   "signature": [
+    4,
+    4
+   ]
+  }
+ ],
+ "notes": [
+  {
+   "measure": 1,
+   "beat": 0.0,
+   "time": 0.0,
+   "dur": 0.3,
+   "string": 6,
+   "fret": 3,
+   "midi": 43
+  },
+  {
+   "measure": 1,
+   "beat": 0.5,
+   "time": 0.3,
+   "dur": 0.3,
+   "string": 6,
+   "fret": 5,
+   "midi": 45
+  },
+  {
+   "measure": 1,
+   "beat": 1.0,
+   "time": 0.6,
+   "dur": 0.3,
+   "string": 5,
+   "fret": 3,
+   "midi": 48
+  },
+  {
+   "measure": 1,
+   "beat": 1.5,
+   "time": 0.9,
+   "dur": 0.3,
+   "string": 5,
+   "fret": 5,
+   "midi": 50
+  },
+  {
+   "measure": 1,
+   "beat": 2.0,
+   "time": 1.2,
+   "dur": 0.3,
+   "string": 4,
+   "fret": 5,
+   "midi": 55
+  },
+  {
+   "measure": 1,
+   "beat": 2.5,
+   "time": 1.5,
+   "dur": 0.3,
+   "string": 4,
+   "fret": 7,
+   "midi": 57
+  },
+  {
+   "measure": 1,
+   "beat": 3.0,
+   "time": 1.8,
+   "dur": 0.3,
+   "string": 3,
+   "fret": 5,
+   "midi": 60
+  },
+  {
+   "measure": 1,
+   "beat": 3.5,
+   "time": 2.1,
+   "dur": 0.3,
+   "string": 3,
+   "fret": 7,
+   "midi": 62
+  }
+ ]
+}
