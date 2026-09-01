@@ -45,7 +45,7 @@ func (m *Model) bindings() []binding {
 			{"j k", "song"},
 			{"l enter", "practise it"},
 			{"/", "filter"},
-			{"i", "import a file"},
+			{"i", "import a tab file"},
 			{"g G", "first, last"},
 			{"d", "remove"},
 			{"r", "reload"},

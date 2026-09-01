@@ -250,9 +250,7 @@ func (m *Model) typing(msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 			if asked == askingImport {
-				m.pending = path
-				m.status = "reading " + filepath.Base(path)
-				return m.run("gpimport.py", path)
+				return m.importFile(path)
 			}
 			if m.current == nil {
 				m.fail = "pick a song on the library screen first"
@@ -300,7 +298,7 @@ func (m *Model) keyLibrary(key string) tea.Cmd {
 			m.pick = 0
 		}
 	case "i":
-		return m.ask(askingImport, "path to a .gp3, .gp4, .gp5 or .gpx file", "")
+		return m.ask(askingImport, "path to a guitar pro file, or a .txt of a plain text tab", "")
 	case "r":
 		return m.loadSongs()
 	case "d":
@@ -308,6 +306,33 @@ func (m *Model) keyLibrary(key string) tea.Cmd {
 	}
 
 	return nil
+}
+
+// importFile takes whatever was typed. A guitar pro file has tracks to choose
+// between and goes to python for it; a text tab is read here and there is
+// nothing to ask, since a text tab is one instrument by definition.
+func (m *Model) importFile(path string) tea.Cmd {
+	if !song.IsText(path) {
+		m.pending = path
+		m.status = "reading " + filepath.Base(path)
+		return m.run("gpimport.py", path)
+	}
+
+	parsed, err := song.LoadASCII(path)
+	if err != nil {
+		m.fail = err.Error()
+		return nil
+	}
+
+	if _, err := song.Write(m.cfg.Library, parsed); err != nil {
+		m.fail = err.Error()
+		return nil
+	}
+
+	m.status = fmt.Sprintf("%s imported, %d notes over %d measures, no rhythm in the source",
+		parsed.Title, len(parsed.Notes), len(parsed.Measures))
+
+	return m.loadSongs()
 }
 
 func (m *Model) importTrack() tea.Cmd {
@@ -408,6 +433,13 @@ func (m *Model) keyPractice(key string) tea.Cmd {
 
 	case "m":
 		if m.engine.Mode == practice.Wait {
+			// a text tab carries the notes and their order and nothing else.
+			// running a clock over it would mark somebody wrong for playing
+			// the rhythm the song actually has
+			if m.current.Untimed {
+				m.fail = "this tab came as text, so it has no rhythm to run a clock against"
+				return nil
+			}
 			m.engine.Mode = practice.Tempo
 		} else {
 			m.engine.Mode = practice.Wait

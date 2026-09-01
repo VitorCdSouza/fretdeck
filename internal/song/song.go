@@ -50,6 +50,12 @@ type Song struct {
 	Measures []Measure `json:"measures"`
 	Notes    []Note    `json:"notes"`
 
+	// Untimed says the source carried no rhythm, which is the case for every
+	// plain text tab. The notes and their order are real; the spacing between
+	// them is not, and the modes that need a clock refuse rather than mark
+	// somebody wrong for playing the rhythm the song actually has
+	Untimed bool `json:"untimed,omitempty"`
+
 	// Path is where the file was read from. It is not part of the format
 	Path string `json:"-"`
 }

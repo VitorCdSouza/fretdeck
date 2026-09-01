@@ -66,8 +66,14 @@ func (m *Model) songRow(item *song.Song, selected bool) string {
 
 	// the track name matters more than the artist here: a file has one artist
 	// and five tracks, and the one on screen is the one being practised
-	right := styleFaint.Render(fmt.Sprintf("♩%.0f", item.Tempo)) + "  " +
-		styleSubtle.Render(fmt.Sprintf("%3d measures", len(item.Measures)))
+	// a text tab has no tempo to print, and printing the one it was spaced
+	// with would be claiming a rhythm the source never carried
+	tempo := styleFaint.Render(fmt.Sprintf("♩%.0f", item.Tempo))
+	if item.Untimed {
+		tempo = styleFaint.Render("  text")
+	}
+
+	right := tempo + "  " + styleSubtle.Render(fmt.Sprintf("%3d measures", len(item.Measures)))
 
 	middle := item.Artist
 	if item.Track != "" {

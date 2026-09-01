@@ -37,6 +37,8 @@ out is the one on the screen.
 - **Or draws the same song as a highway**, six lanes with the notes coming at
   you and a line at the bottom that is now. `v` swaps between the two: the
   highway to play in time, the tab to learn a passage by heart.
+- **Reads a plain text tab**, the kind most of the internet is written in, as
+  well as a Guitar Pro file.
 - **Searches songsterr** for a song, says how hard they call the guitar part,
   and marks the ones already in your library.
 - **Reads a Spotify playlist**, or your liked songs, looks every track up and
@@ -88,6 +90,31 @@ Press `i` on the library screen and give it a path. It reads the tracks in the
 file, you pick one, and it writes a `.json` into `~/fretdeck/songs`. Nothing
 else is needed after that: the imported file is the whole song.
 
+### A plain text tab
+
+`i` also takes a `.txt` of the six line tab everyone writes:
+
+```
+e|-----------------|-----------------|
+B|-----------------|-------------12--|
+G|-------------0---|-----------------|
+D|---0---2---------|-----5-----------|
+A|-2---------------|-----------------|
+E|-----------------|-3---------------|
+```
+
+Save the tab block into a file and give it the path. It reads the frets, keeps
+the bar lines as measures, believes a `Tuning: D A D G B e` line when there is
+one, and knows a hammer on from a fret. A chord sheet is not mistaken for a
+tab, and neither are the dashes in a line of lyrics.
+
+**A text tab has no rhythm in it.** It carries the notes and their order and
+nothing else: no durations, no tempo, not even which of two notes side by side
+is the longer one. So a song imported this way is marked as text, and tempo
+mode refuses it rather than marking you wrong for playing the rhythm the song
+actually has. Wait mode and the highway both work on it, and between them that
+is most of what learning a riff is.
+
 ### Finding one you do not have
 
 The search screen asks songsterr. It answers which songs have a tab, which
@@ -103,6 +130,9 @@ next week.
 So `enter` on a result opens its page in your browser. Download the file there,
 and the app takes over again: it watches your downloads folder for ten minutes,
 and the moment a `.gp*` lands it reads the tracks and asks which one you want.
+
+The app does not go and fetch tabs from anywhere by itself, songsterr included.
+It searches, and it reads what you give it.
 
 ### From a Spotify playlist
 
@@ -158,7 +188,7 @@ follow, but it is not marking your voicings.
 fretdeck/
 ├── cmd/fretdeck/       the entry point
 ├── internal/
-│   ├── song/           the song model and the tab drawing
+│   ├── song/           the song model, the tab drawing and the text tab reader
 │   ├── practice/       the modes, the clock and the scoring
 │   ├── songsterr/      the search, and matching a streamed track to a tab
 │   ├── bridge/         talking to the python side

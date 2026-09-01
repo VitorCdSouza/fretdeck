@@ -72,6 +72,9 @@ func (m *Model) practiceHead() string {
 	}
 
 	mode := view + styleFaint.Render("   ") + styleAccent.Render(m.engine.Mode.String())
+	if m.current.Untimed {
+		mode = view + styleFaint.Render("   ") + styleFaint.Render("no rhythm")
+	}
 	if m.engine.Mode == practice.Tempo {
 		mode += styleFaint.Render(fmt.Sprintf("  %.0f%%", m.engine.Speed*100))
 	}
