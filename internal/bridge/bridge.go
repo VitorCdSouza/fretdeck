@@ -30,18 +30,30 @@ const (
 	EventNote    = "note"
 	EventLevel   = "level"
 
-	EventListening    = "listening"
-	EventListenError  = "listen_error"
+	// EventWorkerGone is written here and not by python, which by then is the
+	// thing that is gone
+	EventWorkerGone = "worker_gone"
+
+	// EventScriptLog is a one shot script writing on stderr, and
+	// EventScriptGone is one that could not be started at all. They are not
+	// EventLog because the two mouths are told apart by the name of the event:
+	// a log of the live worker's has to go back to the live worker
+	EventScriptLog  = "script_log"
+	EventScriptGone = "script_gone"
+
+	EventListening   = "listening"
+	EventListenError = "listen_error"
+
+	// EventListenWaiting is an input that is not there yet and is being waited
+	// for, which is not a failure: the worker opens it as soon as it is back
+	EventListenWaiting = "listen_waiting"
+
 	EventStopped      = "stopped"
 	EventAudioWarning = "audio_warning"
 
 	EventTracks      = "tracks"
 	EventImported    = "imported"
 	EventImportError = "import_error"
-
-	EventProgress     = "progress"
-	EventReport       = "report"
-	EventAnalyzeError = "analyze_error"
 
 	EventSpotifyLog       = "spotify_log"
 	EventSpotifyReady     = "spotify_ready"
@@ -55,6 +67,13 @@ type Command struct {
 	Action string `json:"action"`
 	Device int    `json:"device,omitempty"`
 	Rate   int    `json:"rate,omitempty"`
+
+	// Source is the input to read, by the name the sound server gives it
+	Source string `json:"source,omitempty"`
+
+	// Card is what that input is plugged into, which a profile change does not
+	// rename. It is what finds the input again when the name has changed
+	Card string `json:"card,omitempty"`
 }
 
 // Decode reads the data of an event into v.

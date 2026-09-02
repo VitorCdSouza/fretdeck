@@ -29,6 +29,8 @@ type Tab struct {
 
 // Row is one string of the tab cut in three, so the caller can paint what is
 // behind the cursor, the cursor itself and what is coming in three colours.
+// At holds the fret under the cursor and nothing else: it is empty on a string
+// the column does not play, and the line beside the fret goes with After.
 type Row struct {
 	Label  string
 	Before string
@@ -36,11 +38,20 @@ type Row struct {
 	After  string
 }
 
+// Span is where one measure sits on the line that was drawn, so the screen can
+// mark the measures somebody picked without laying the tab out a second time.
+type Span struct {
+	Measure int
+	At      int
+	Width   int
+}
+
 // View is what fits on the screen around the current event.
 type View struct {
 	Rows    []Row
 	Header  string
 	Measure int
+	Spans   []Span
 }
 
 func NewTab(s *Song, events []Event) *Tab {
@@ -151,14 +162,22 @@ func (t *Tab) View(event, width int) View {
 	rows := make([]Row, 0, len(t.song.Tuning))
 
 	for _, str := range t.song.Tuning {
-		var before, at, after strings.Builder
+		var before, after strings.Builder
+		at := ""
 		for index := start; index < end; index++ {
 			text := t.cell(t.columns[index], str.Number)
 			switch {
 			case index < cursor:
 				before.WriteString(text)
 			case index == cursor:
-				at.WriteString(text)
+				// only the fret is the cursor. the rest of the column is the
+				// string lying there, and colouring it would read as an
+				// instruction to play that string too
+				fret, played := t.columns[index].frets[str.Number]
+				if played {
+					at = fret
+				}
+				after.WriteString(text[len(at):])
 			default:
 				after.WriteString(text)
 			}
@@ -166,12 +185,35 @@ func (t *Tab) View(event, width int) View {
 		rows = append(rows, Row{
 			Label:  t.song.Label(str.Number),
 			Before: before.String(),
-			At:     at.String(),
+			At:     at,
 			After:  after.String(),
 		})
 	}
 
-	return View{Rows: rows, Header: t.header(start, end), Measure: t.columns[cursor].measure}
+	return View{
+		Rows:    rows,
+		Header:  t.header(start, end),
+		Measure: t.columns[cursor].measure,
+		Spans:   t.spans(start, end),
+	}
+}
+
+// spans is how wide each measure came out and how far in it starts, counted in
+// the same cells the rows above were written in.
+func (t *Tab) spans(start, end int) []Span {
+	var spans []Span
+	offset := 0
+
+	for index := start; index < end; index++ {
+		col := t.columns[index]
+		if len(spans) == 0 || spans[len(spans)-1].Measure != col.measure {
+			spans = append(spans, Span{Measure: col.measure, At: offset})
+		}
+		spans[len(spans)-1].Width += col.width
+		offset += col.width
+	}
+
+	return spans
 }
 
 // header stamps the measure number over each bar line. It is written into a

@@ -75,6 +75,34 @@ func (w *Worker) pump(stdout io.Reader) {
 		}
 		w.Events <- event
 	}
+
+	// the output ended, which is a process that is gone. saying so is the only
+	// thing between that and a screen waiting for an answer that cannot come
+	w.buried()
+	w.Events <- Event{Event: EventWorkerGone, Message: "the audio worker stopped"}
+}
+
+// buried reaps the process and takes the pipe away, so a send after it answers
+// for itself instead of writing into a pipe nobody holds.
+func (w *Worker) buried() {
+	w.mu.Lock()
+	stdin, cmd := w.stdin, w.cmd
+	w.stdin, w.cmd = nil, nil
+	w.mu.Unlock()
+
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if cmd != nil {
+		_ = cmd.Wait()
+	}
+}
+
+// Running answers whether there is a process to talk to.
+func (w *Worker) Running() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.stdin != nil
 }
 
 // drain turns whatever the libraries print on stderr into log events. Alsa

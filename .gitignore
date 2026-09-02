@@ -1,5 +1,7 @@
-fretdeck
+/fretdeck
 /cmd/fretdeck/fretdeck
 __pycache__/
 *.pyc
 *.log
+/credentials.json
+/.claude/

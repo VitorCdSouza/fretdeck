@@ -1,10 +1,15 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+func textinputBlink() tea.Cmd { return textinput.Blink }
 
 // The palette is the one an electric guitar is actually made of: brass for the
 // frets and the accent, a warm off white for the text instead of a grey, sage
@@ -20,17 +25,89 @@ var (
 	colorSage   = lipgloss.AdaptiveColor{Light: "#3F7A3A", Dark: "#8FBF6F"}
 	colorRust   = lipgloss.AdaptiveColor{Light: "#A33B22", Dark: "#D9603F"}
 	colorCopper = lipgloss.AdaptiveColor{Light: "#9A5A24", Dark: "#CF8B4C"}
+
+	// the repeat mode paints the app in this instead of the brass, since a
+	// mode that changes what the keys do has to be seen and not remembered
+	colorAzure = lipgloss.AdaptiveColor{Light: "#1F5FA8", Dark: "#7FB2E5"}
+
+	// the band the row under the cursor sits on
+	colorRow = lipgloss.AdaptiveColor{Light: "#E7DBC3", Dark: "#332C23"}
 )
 
+// rowPaint is that band, and every piece of a row has to carry it
+type rowPaint bool
+
+// of hands back the style with the band behind it, since a background laid
+// over a finished line ends at the first reset the styles inside it wrote
+func (on rowPaint) of(style lipgloss.Style) lipgloss.Style {
+	if !on {
+		return style
+	}
+	return style.Background(colorRow)
+}
+
+// pad is the pad of a row, with the gap between its halves painted too
+func (on rowPaint) pad(left, right string, width int) string {
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + on.of(lipgloss.NewStyle()).Render(strings.Repeat(" ", gap)) + right
+}
+
+// the bar under a button, and the thicker one under the screen that is open.
+// The button is only its name, its padding and this.
 var (
-	styleBrand   = lipgloss.NewStyle().Bold(true).Foreground(colorBrass)
-	styleTab     = lipgloss.NewStyle().Foreground(colorSubtle)
-	styleTabOn   = lipgloss.NewStyle().Bold(true).Foreground(colorInk)
+	tabUnderline   = lipgloss.Border{Bottom: "─"}
+	tabUnderlineOn = lipgloss.Border{Bottom: "━"}
+)
+
+// accent is the colour the app is recognised by, and repaint is what swaps it.
+// The styles that carry it are built there and not here, so there is still one
+// place the colours live.
+var accent lipgloss.TerminalColor = colorBrass
+
+func repaint(repeating bool) {
+	accent = colorBrass
+	if repeating {
+		accent = colorAzure
+	}
+
+	styleBrand = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	styleAccent = lipgloss.NewStyle().Foreground(accent)
+	styleTabHere = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	styleTabBoxOn = lipgloss.NewStyle().Border(tabUnderlineOn, false, false, true, false).
+		BorderForeground(accent).Padding(0, tabPad)
+}
+
+func init() { repaint(false) }
+
+var (
+	// the four repaint owns, since the accent is what a mode changes
+	styleBrand    lipgloss.Style
+	styleAccent   lipgloss.Style
+	styleTabHere  lipgloss.Style
+	styleTabBoxOn lipgloss.Style
+
+	styleTab   = lipgloss.NewStyle().Foreground(colorSubtle)
+	styleTabOn = lipgloss.NewStyle().Bold(true).Foreground(colorInk)
+
+	// a screen is a button and the border is the bar under it, which is a box
+	// with the sides taken off: two rows instead of three, and nothing between
+	// the name and the edge of the button but the padding
+	styleTabBox = lipgloss.NewStyle().Border(tabUnderline, false, false, true, false).
+			BorderForeground(colorFaint).Padding(0, tabPad)
+
+	// the one button of the app, on the spotify screen with nobody logged in.
+	// the border is faint and the label carries the accent, so the mode still
+	// paints it without a fifth style to rebuild
+	styleButton = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorFaint).Padding(0, 2)
+
 	styleRule    = lipgloss.NewStyle().Foreground(colorFaint)
 	styleInk     = lipgloss.NewStyle().Foreground(colorInk)
 	styleSubtle  = lipgloss.NewStyle().Foreground(colorSubtle)
 	styleFaint   = lipgloss.NewStyle().Foreground(colorFaint)
-	styleAccent  = lipgloss.NewStyle().Foreground(colorBrass)
 	styleHeading = lipgloss.NewStyle().Bold(true).Foreground(colorInk)
 	styleOk      = lipgloss.NewStyle().Foreground(colorSage)
 	styleBad     = lipgloss.NewStyle().Foreground(colorRust)
@@ -41,7 +118,6 @@ var (
 	// eye is pulled forward instead of back
 	styleTabPast = lipgloss.NewStyle().Foreground(colorFaint)
 	styleTabNext = lipgloss.NewStyle().Foreground(colorSubtle)
-	styleTabHere = lipgloss.NewStyle().Bold(true).Foreground(colorBrass)
 	styleString  = lipgloss.NewStyle().Foreground(colorSubtle)
 )
 
@@ -90,3 +166,21 @@ func bar(fraction float64, width int, style lipgloss.Style) string {
 // marker is the caret drawn over the string being played, so the eye finds the
 // line without reading the fret numbers first.
 const marker = "▾"
+
+// plural keeps the count and its noun agreeing, since a library of one is the
+// state the app opens in the first time it is used.
+func plural(count int, noun string) string {
+	if count == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
+}
+
+// sectionHead is the small caps title every screen opens with.
+func (m *Model) sectionHead(title, right string) string {
+	left := "  " + styleAccent.Render(title)
+	if right == "" {
+		return left
+	}
+	return pad(left, styleFaint.Render(right), m.width)
+}

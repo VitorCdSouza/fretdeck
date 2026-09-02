@@ -22,11 +22,23 @@ const endpoint = "https://www.songsterr.com/api/songs"
 // agent is sent because the search answers 403 to a bare go client.
 const agent = "Mozilla/5.0 (X11; Linux x86_64) fretdeck"
 
-// guitar is the general midi range the guitars sit in, 24 nylon through 31
-// harmonics. Bass starts at 32 and is a different instrument to practise.
+// the general midi ranges the two instruments sit in: 24 nylon through 31
+// harmonics for a guitar, 32 acoustic through 39 synth for a bass.
 const (
 	guitarFirst = 24
 	guitarLast  = 31
+	bassFirst   = 32
+	bassLast    = 39
+)
+
+// Family is which of the two a search is being read for. A bass tab and a
+// guitar tab of the same song are different things to practise, so the
+// difficulty has to come off the track of the instrument being played.
+type Family int
+
+const (
+	Guitar Family = iota
+	Bass
 )
 
 // Track is one instrument of a transcription.
@@ -40,7 +52,11 @@ type Track struct {
 	Hash         string `json:"hash"`
 }
 
-func (t Track) Guitar() bool {
+// In answers whether the track was written for that family.
+func (t Track) In(family Family) bool {
+	if family == Bass {
+		return t.InstrumentID >= bassFirst && t.InstrumentID <= bassLast
+	}
 	return t.InstrumentID >= guitarFirst && t.InstrumentID <= guitarLast
 }
 
@@ -52,12 +68,12 @@ type Song struct {
 	Tracks []Track `json:"tracks"`
 }
 
-// Guitar is the guitar track most people opened, which is the one worth
-// reporting a difficulty from. A song written for no guitar answers false.
-func (s Song) Guitar() (Track, bool) {
+// Played is the track of that family most people opened, which is the one
+// worth reporting a difficulty from. A song written for neither answers false.
+func (s Song) Played(family Family) (Track, bool) {
 	best, found := Track{}, false
 	for _, track := range s.Tracks {
-		if !track.Guitar() {
+		if !track.In(family) {
 			continue
 		}
 		if !found || track.Views > best.Views {
@@ -67,11 +83,11 @@ func (s Song) Guitar() (Track, bool) {
 	return best, found
 }
 
-// Difficulty is what songsterr calls the guitar track, and zero when it says
+// Difficulty is what songsterr calls that track, and zero when it says
 // nothing. The scale is theirs and runs past five, so it is carried as the
 // number it is rather than rounded into stars that would invent a ceiling.
-func (s Song) Difficulty() int {
-	if track, ok := s.Guitar(); ok {
+func (s Song) Difficulty(family Family) int {
+	if track, ok := s.Played(family); ok {
 		return track.Difficulty
 	}
 	return 0
@@ -88,13 +104,18 @@ func (s Song) URL() string {
 type Client struct {
 	Base string
 	HTTP *http.Client
+
+	// Family is what the setup was told is plugged in. It is a field of the
+	// client because every search of a session is read for the same instrument
+	Family Family
 }
 
 func New() *Client {
 	return &Client{Base: endpoint, HTTP: &http.Client{Timeout: 15 * time.Second}}
 }
 
-// Search asks for songs matching a pattern, guitar songs first.
+// Search asks for songs matching a pattern, the ones written for the
+// instrument first.
 func (c *Client) Search(ctx context.Context, pattern string) ([]Song, error) {
 	address := c.Base + "?pattern=" + url.QueryEscape(pattern)
 
@@ -120,11 +141,12 @@ func (c *Client) Search(ctx context.Context, pattern string) ([]Song, error) {
 		return nil, err
 	}
 
-	// a song with no guitar in it is not what anybody typed into this app, so
-	// it goes to the bottom rather than being dropped: the artist may be right
+	// a song with nothing in it for the instrument is not what anybody typed
+	// into this app, so it goes to the bottom rather than being dropped: the
+	// artist may still be the one that was asked for
 	sort.SliceStable(songs, func(i, j int) bool {
-		_, left := songs[i].Guitar()
-		_, right := songs[j].Guitar()
+		_, left := songs[i].Played(c.Family)
+		_, right := songs[j].Played(c.Family)
 		return left && !right
 	})
 
@@ -152,6 +174,13 @@ func Best(songs []Song, artist, title string) (Song, bool) {
 	}
 
 	return Song{}, false
+}
+
+// Key is the one name two catalogues agree on for a song, and what a lookup
+// is remembered by. A search answers a dozen transcriptions of one song and
+// they all share the one difficulty, so twenty rows cost one request.
+func Key(artist, title string) string {
+	return normalize(artist) + "/" + normalize(title)
 }
 
 // normalize strips what the two catalogues disagree about: case, punctuation

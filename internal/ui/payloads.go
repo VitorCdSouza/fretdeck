@@ -4,6 +4,12 @@ package ui
 // has to know the json of an event it only displays.
 
 type deviceInfo struct {
+	// ID is the name the sound server gives the input, and an index is not that
+	ID string `json:"id"`
+
+	// Card is what it is plugged into, which outlives the name: a card put in
+	// another profile answers under a node name it has never been saved under
+	Card     string `json:"card"`
 	Index    int    `json:"index"`
 	Name     string `json:"name"`
 	Host     string `json:"host"`
@@ -14,6 +20,15 @@ type deviceInfo struct {
 
 type devicesPayload struct {
 	Devices []deviceInfo `json:"devices"`
+}
+
+// listeningPayload is the input that was really opened, which is not always
+// the one that was asked for.
+type listeningPayload struct {
+	Device int    `json:"device"`
+	Source string `json:"source"`
+	Card   string `json:"card"`
+	Rate   int    `json:"rate"`
 }
 
 type notePayload struct {
@@ -36,62 +51,4 @@ type levelPayload struct {
 	Name  string  `json:"name"`
 	Cents float64 `json:"cents"`
 	Conf  float64 `json:"conf"`
-}
-
-type trackInfo struct {
-	Index    int    `json:"index"`
-	Name     string `json:"name"`
-	Strings  int    `json:"strings"`
-	Playable bool   `json:"playable"`
-	Measures int    `json:"measures"`
-}
-
-type tracksPayload struct {
-	Title  string      `json:"title"`
-	Tracks []trackInfo `json:"tracks"`
-}
-
-type importedPayload struct {
-	Path     string `json:"path"`
-	Title    string `json:"title"`
-	Notes    int    `json:"notes"`
-	Measures int    `json:"measures"`
-}
-
-type progressPayload struct {
-	Done  int `json:"done"`
-	Total int `json:"total"`
-}
-
-type reportSummary struct {
-	Notes    int     `json:"notes"`
-	Hits     int     `json:"hits"`
-	Accuracy float64 `json:"accuracy"`
-	Extras   int     `json:"extras"`
-	Missed   int     `json:"missed"`
-	Duration float64 `json:"duration"`
-	Tempo    float64 `json:"tempo"`
-}
-
-type reportMeasure struct {
-	Index int `json:"index"`
-	Notes int `json:"notes"`
-	Hits  int `json:"hits"`
-}
-
-type reportNote struct {
-	Kind     string   `json:"kind"`
-	Measure  int      `json:"measure"`
-	Time     float64  `json:"time"`
-	At       float64  `json:"at"`
-	Frets    [][2]int `json:"frets"`
-	Expected []string `json:"expected"`
-	Played   string   `json:"played"`
-}
-
-type reportPayload struct {
-	Song     string          `json:"song"`
-	Summary  reportSummary   `json:"summary"`
-	Measures []reportMeasure `json:"measures"`
-	Notes    []reportNote    `json:"notes"`
 }

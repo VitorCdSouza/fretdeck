@@ -12,7 +12,7 @@ func TestOnlyTheRealScriptsAreEmbedded(t *testing.T) {
 
 	want := map[string]bool{
 		"pitch.py": true, "worker.py": true, "gpimport.py": true,
-		"analyze.py": true, "spotify.py": true,
+		"spotify.py": true,
 	}
 	if len(entries) != len(want) {
 		t.Fatalf("want %d scripts embedded, got %d", len(want), len(entries))

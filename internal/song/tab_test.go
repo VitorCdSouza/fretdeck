@@ -114,3 +114,23 @@ func TestATwoDigitFretStillFitsItsColumn(t *testing.T) {
 		t.Fatalf("the twelfth fret was cut: %q", view.Rows[4].At)
 	}
 }
+
+// The riff ends on a chord of the G and B strings, which is the case that
+// says whether the cursor column marks the strings it plays or the whole
+// column.
+func TestTheCursorMarksOnlyTheStringsItPlays(t *testing.T) {
+	s := riff()
+	view := NewTab(s, s.Events()).View(2, 60)
+
+	if view.Rows[1].At != "1" || view.Rows[2].At != "0" {
+		t.Fatalf("the chord lost a string: B is %q and G is %q", view.Rows[1].At, view.Rows[2].At)
+	}
+	for _, index := range []int{0, 3, 4, 5} {
+		if view.Rows[index].At != "" {
+			t.Fatalf("row %d is not in the chord and was marked as %q", index, view.Rows[index].At)
+		}
+	}
+	if strings.ContainsAny(view.Rows[1].At, "─━") {
+		t.Fatalf("the line beside the fret is not the cursor: %q", view.Rows[1].At)
+	}
+}

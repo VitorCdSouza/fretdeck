@@ -8,8 +8,8 @@ import (
 )
 
 // Run starts a script that has one job, and streams what it says until it
-// ends. The importer and the analyzer are both like that: they answer once and
-// exit, so there is nothing to keep alive between two of them.
+// ends. The importer and the spotify side are both like that: they answer once
+// and exit, so there is nothing to keep alive between two of them.
 func Run(ctx context.Context, script string, args []string, events chan<- Event) error {
 	path, err := scriptPath(script)
 	if err != nil {
@@ -35,7 +35,7 @@ func Run(ctx context.Context, script string, args []string, events chan<- Event)
 		defer close(done)
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			events <- Event{Event: EventLog, Message: scanner.Text()}
+			events <- Event{Event: EventScriptLog, Message: scanner.Text()}
 		}
 	}()
 
@@ -44,7 +44,7 @@ func Run(ctx context.Context, script string, args []string, events chan<- Event)
 	for scanner.Scan() {
 		var event Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			events <- Event{Event: EventLog, Message: scanner.Text()}
+			events <- Event{Event: EventScriptLog, Message: scanner.Text()}
 			continue
 		}
 		events <- event

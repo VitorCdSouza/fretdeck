@@ -195,3 +195,79 @@ E|-3------|
 		t.Fatalf("want the bass E, got midi %d", parsed.Notes[0].Midi)
 	}
 }
+
+// bare is the same tab with no tuning line in it, which is how a tab site
+// stores one: the tuning is kept beside the text, not in it.
+const bare = `e|-----------------|
+B|-----------------|
+G|-----------------|
+D|-----------------|
+A|-----------------|
+E|-0---3-----------|
+`
+
+func TestParseTunedBelievesTheTuningTheSourceCarried(t *testing.T) {
+	parsed, err := ParseTuned(bare, "test", "D A D G B E")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the sixth string is the thickest and the value is written from it
+	if got := parsed.Label(6); got != "D" {
+		t.Fatalf("want the low string tuned to D, got %q", got)
+	}
+	if parsed.Notes[0].Midi != 38 {
+		t.Fatalf("want the open sixth at 38, got %d", parsed.Notes[0].Midi)
+	}
+}
+
+func TestParseTunedFallsBackWhenTheValueDoesNotFit(t *testing.T) {
+	parsed, err := ParseTuned(bare, "test", "D A D")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := parsed.Label(6); got != "E" {
+		t.Fatalf("a tuning of the wrong length is not believed, got %q", got)
+	}
+}
+
+// annotated is the shape the same tab takes when whoever wrote it said
+// something beside one of the strings, which is where the block used to break.
+const annotated = `Seven Nation Army
+
+e|----------------|----------|
+B|----------------|----------|
+G|----------------|----------|
+D|----------------|----------| repeat through verse
+A|--7--7-10-7-----|----------|
+E|------------10--|-8---7----|
+`
+
+func TestAWordBesideTheLineIsNotPartOfTheTab(t *testing.T) {
+	parsed, err := ParseASCII(annotated, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(parsed.Tuning) != 6 {
+		t.Fatalf("the block came out %d lines wide, so the annotated one was dropped", len(parsed.Tuning))
+	}
+
+	want := []struct {
+		str  int
+		fret int
+	}{
+		{5, 7}, {5, 7}, {5, 10}, {5, 7}, {6, 10}, {6, 8}, {6, 7},
+	}
+
+	if len(parsed.Notes) != len(want) {
+		t.Fatalf("want %d notes, got %d", len(want), len(parsed.Notes))
+	}
+	for index, note := range parsed.Notes {
+		if note.String != want[index].str || note.Fret != want[index].fret {
+			t.Fatalf("note %d is string %d fret %d, want string %d fret %d",
+				index, note.String, note.Fret, want[index].str, want[index].fret)
+		}
+	}
+}

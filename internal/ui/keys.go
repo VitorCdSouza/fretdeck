@@ -2,8 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,17 +28,43 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	// a removal asks first, and anything that is not yes is no
+	if m.removing {
+		m.removing = false
+		if msg.String() == "y" {
+			return m.forget(m.found)
+		}
+		m.status = "left it where it was"
+		return nil
+	}
+
 	if m.input.Focused() {
 		return m.typing(msg)
 	}
 
 	key := msg.String()
 
+	// esc is the way back to the normal mode, and it is answered here before
+	// the screen under it sees a key that also means leave
+	if key == "esc" && m.mode != modeNormal {
+		m.normal()
+		return nil
+	}
+
 	// gg is two keys, so the first is remembered and anything else forgets it
 	if m.pendingG {
 		m.pendingG = false
 		if key == "g" {
 			m.jump(-1)
+			return nil
+		}
+	}
+
+	// the first run is two steps and they are the whole of the app until they
+	// are answered: there is nothing to walk to yet
+	if m.first != firstRunDone {
+		switch key {
+		case "H", "L":
 			return nil
 		}
 	}
@@ -57,15 +81,13 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 	case "G":
 		m.jump(1)
 		return nil
-	case "L", "tab":
-		m.goTo(screen((int(m.screen) + 1) % len(screenNames)))
-		return nil
-	case "H", "shift+tab":
-		m.goTo(screen((int(m.screen) + len(screenNames) - 1) % len(screenNames)))
-		return nil
-	case "1", "2", "3", "4", "5", "6":
-		m.goTo(screen(int(key[0] - '1')))
-		return nil
+	// the screens are walked with these two and with nothing else. a number
+	// key that jumps straight to one is a second scheme to remember, and the
+	// buttons on the line above say which way each of the two goes
+	case "L":
+		return m.goTo(tabScreens[(m.tabHere()+1)%len(tabScreens)])
+	case "H":
+		return m.goTo(tabScreens[(m.tabHere()+len(tabScreens)-1)%len(tabScreens)])
 	case "j", "down":
 		m.move(1)
 		return nil
@@ -75,16 +97,14 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch m.screen {
-	case screenLibrary:
-		return m.keyLibrary(key)
-	case screenSearch:
+	case screenMusic:
 		return m.keySearch(key)
+	case screenSpotify:
+		return m.keySpotify(key)
 	case screenPractice:
 		return m.keyPractice(key)
-	case screenAnalyze:
-		return m.keyAnalyze(key)
-	case screenSetup:
-		return m.keySetup(key)
+	case screenConfig:
+		return m.keyConfig(key)
 	}
 
 	return nil
@@ -94,18 +114,12 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 // cursor at most, so the movement lives here instead of five times over.
 func (m *Model) move(delta int) {
 	switch m.screen {
-	case screenLibrary:
-		if m.tracks != nil {
-			m.track = clamp(m.track+delta, len(m.tracks))
-			return
-		}
-		m.pick = clamp(m.pick+delta, len(m.filtered()))
-	case screenSearch:
+	case screenMusic:
 		m.found = clamp(m.found+delta, len(m.results))
-	case screenAnalyze:
-		m.reportRow = clamp(m.reportRow+delta, m.problemCount())
-	case screenSetup:
-		m.device = clamp(m.device+delta, len(m.devices))
+	case screenSpotify:
+		m.picked = clamp(m.picked+delta, m.spotifyRows())
+	case screenConfig:
+		m.configRow = clamp(m.configRow+delta, m.configCount())
 	case screenPractice:
 		if m.engine == nil {
 			return
@@ -121,18 +135,12 @@ func (m *Model) move(delta int) {
 func (m *Model) jump(direction int) {
 	last := 0
 	switch m.screen {
-	case screenLibrary:
-		if m.tracks != nil {
-			last = len(m.tracks) - 1
-		} else {
-			last = len(m.filtered()) - 1
-		}
-	case screenSearch:
+	case screenMusic:
 		last = len(m.results) - 1
-	case screenAnalyze:
-		last = m.problemCount() - 1
-	case screenSetup:
-		last = len(m.devices) - 1
+	case screenSpotify:
+		last = m.spotifyRows() - 1
+	case screenConfig:
+		last = m.configCount() - 1
 	case screenPractice:
 		if m.engine == nil {
 			return
@@ -156,18 +164,12 @@ func (m *Model) jump(direction int) {
 	}
 
 	switch m.screen {
-	case screenLibrary:
-		if m.tracks != nil {
-			m.track = target
-			return
-		}
-		m.pick = target
-	case screenSearch:
+	case screenMusic:
 		m.found = target
-	case screenAnalyze:
-		m.reportRow = target
-	case screenSetup:
-		m.device = target
+	case screenSpotify:
+		m.picked = target
+	case screenConfig:
+		m.configRow = target
 	}
 }
 
@@ -181,18 +183,32 @@ func clamp(value, length int) int {
 	return value
 }
 
-func (m *Model) goTo(next screen) {
+func (m *Model) goTo(next screen) tea.Cmd {
 	// leaving the practice screen stops the clock. coming back to a song that
 	// kept counting while nobody was looking would report a wall of misses
 	if m.screen == screenPractice && m.engine != nil {
 		m.engine.Stop()
 	}
+
+	// the repeat mode is that screen's, and its keys mean something else on
+	// every other one. what was picked is kept and is still looped over
+	if next != screenPractice {
+		m.setMode(modeNormal)
+	}
 	m.screen = next
 	m.status = ""
+
+	// the spotify library is read the first time that screen is opened
+	if next == screenSpotify {
+		return m.enterSpotify()
+	}
+
+	return nil
 }
 
 // ask opens the one text field of the app for a particular question.
 func (m *Model) ask(what asking, placeholder, value string) tea.Cmd {
+	m.setMode(modeInsert)
 	m.asking = what
 	m.input.Placeholder = placeholder
 	m.input.SetValue(value)
@@ -202,24 +218,6 @@ func (m *Model) ask(what asking, placeholder, value string) tea.Cmd {
 }
 
 func (m *Model) typing(msg tea.KeyMsg) tea.Cmd {
-	// the filter reads as you type, or it would be a dialog and not a filter
-	if m.asking == askingFilter {
-		switch msg.Type {
-		case tea.KeyEsc:
-			m.filter = ""
-			m.closeInput()
-			return nil
-		case tea.KeyEnter:
-			m.closeInput()
-			return nil
-		}
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		m.filter = m.input.Value()
-		m.pick = clamp(m.pick, len(m.filtered()))
-		return cmd
-	}
-
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.closeInput()
@@ -236,31 +234,7 @@ func (m *Model) typing(msg tea.KeyMsg) tea.Cmd {
 
 		switch asked {
 		case askingQuery:
-			m.query = value
-			m.results = nil
-			m.found = 0
-			m.seeking = true
-			m.status = "searching songsterr for " + value
-			return m.searchSongsterr(value)
-
-		case askingImport, askingRecording:
-			path := expand(value)
-			if _, err := os.Stat(path); err != nil {
-				m.fail = err.Error()
-				return nil
-			}
-			if asked == askingImport {
-				return m.importFile(path)
-			}
-			if m.current == nil {
-				m.fail = "pick a song on the library screen first"
-				return nil
-			}
-			m.report = nil
-			m.progress = 0
-			m.running = true
-			m.status = "listening to " + filepath.Base(path)
-			return m.run("analyze.py", "--song", m.current.Path, "--audio", path)
+			return m.askUltimate(value)
 		}
 		return nil
 	}
@@ -274,137 +248,18 @@ func (m *Model) closeInput() {
 	m.input.Blur()
 	m.input.SetValue("")
 	m.asking = askingNothing
+	m.setMode(modeNormal)
 }
 
-func (m *Model) keyLibrary(key string) tea.Cmd {
-	if m.tracks != nil {
-		switch key {
-		case "l", "enter":
-			return m.importTrack()
-		case "h", "esc":
-			m.tracks = nil
-		}
-		return nil
-	}
-
-	switch key {
-	case "l", "enter":
-		return m.openSong()
-	case "/":
-		return m.ask(askingFilter, "filter the library", m.filter)
-	case "h", "esc":
-		if m.filter != "" {
-			m.filter = ""
-			m.pick = 0
-		}
-	case "i":
-		return m.ask(askingImport, "path to a guitar pro file, or a .txt of a plain text tab", "")
-	case "r":
-		return m.loadSongs()
-	case "d":
-		return m.deleteSong()
-	}
-
-	return nil
-}
-
-// importFile takes whatever was typed. A guitar pro file has tracks to choose
-// between and goes to python for it; a text tab is read here and there is
-// nothing to ask, since a text tab is one instrument by definition.
-func (m *Model) importFile(path string) tea.Cmd {
-	if !song.IsText(path) {
-		m.pending = path
-		m.status = "reading " + filepath.Base(path)
-		return m.run("gpimport.py", path)
-	}
-
-	parsed, err := song.LoadASCII(path)
-	if err != nil {
-		m.fail = err.Error()
-		return nil
-	}
-
-	if _, err := song.Write(m.cfg.Library, parsed); err != nil {
-		m.fail = err.Error()
-		return nil
-	}
-
-	m.status = fmt.Sprintf("%s imported, %d notes over %d measures, no rhythm in the source",
-		parsed.Title, len(parsed.Notes), len(parsed.Measures))
-
-	return m.loadSongs()
-}
-
-func (m *Model) importTrack() tea.Cmd {
-	if m.track >= len(m.tracks) {
-		return nil
-	}
-
-	chosen := m.tracks[m.track]
-	if !chosen.Playable {
-		m.fail = "that track has no strings, so there is no tab to draw"
-		return nil
-	}
-
-	out := filepath.Join(m.cfg.Library, slug(filepath.Base(m.pending), chosen.Name)+".json")
-	m.status = "importing " + chosen.Name
-
-	return m.run("gpimport.py", m.pending, "--track", fmt.Sprint(chosen.Index), "--out", out)
-}
-
-// filtered is the library narrowed by whatever was typed after the slash. The
-// match is over the title, the artist and the track, since all three are on the
-// row and any of them is a reasonable thing to type.
-func (m *Model) filtered() []*song.Song {
-	if m.filter == "" {
-		return m.songs
-	}
-
-	needle := strings.ToLower(m.filter)
-	var kept []*song.Song
-	for _, item := range m.songs {
-		haystack := strings.ToLower(item.Title + " " + item.Artist + " " + item.Track)
-		if strings.Contains(haystack, needle) {
-			kept = append(kept, item)
-		}
-	}
-
-	return kept
-}
-
-func (m *Model) openSong() tea.Cmd {
-	list := m.filtered()
-	if m.pick >= len(list) {
-		return nil
-	}
-
-	m.current = list[m.pick]
-	m.engine = practice.New(m.current, practice.Wait)
+// open loads a song into the practice screen. It is the only way in now: every
+// song comes off a row of the search.
+func (m *Model) open(loaded *song.Song) {
+	m.current = loaded
+	m.engine = practice.New(loaded, practice.Wait)
 	m.engine.Speed = m.cfg.Speed
-	m.tab = song.NewTab(m.current, m.engine.Events)
+	m.tab = song.NewTab(loaded, m.engine.Events)
 	m.screen = screenPractice
 	m.status = ""
-
-	return nil
-}
-
-func (m *Model) deleteSong() tea.Cmd {
-	list := m.filtered()
-	if m.pick >= len(list) {
-		return nil
-	}
-
-	path := list[m.pick].Path
-	if err := os.Remove(path); err != nil {
-		m.fail = err.Error()
-		return nil
-	}
-	if m.current != nil && m.current.Path == path {
-		m.current, m.engine, m.tab = nil, nil, nil
-	}
-
-	m.status = "removed " + filepath.Base(path)
-	return m.loadSongs()
 }
 
 func (m *Model) keyPractice(key string) tea.Cmd {
@@ -417,6 +272,13 @@ func (m *Model) keyPractice(key string) tea.Cmd {
 		m.highway = !m.highway
 
 	case " ":
+		// in the repeat mode the space is what picks a passage, since the
+		// measure under the cursor is the thing already being looked at
+		if m.mode == modeRepeat {
+			m.pickRepeat()
+			return nil
+		}
+
 		// wait mode has no clock to start, and saying stopped there would be
 		// answering a question nobody asked
 		if m.engine.Mode == practice.Wait {
@@ -448,6 +310,18 @@ func (m *Model) keyPractice(key string) tea.Cmd {
 		m.engine.Reset()
 
 	case "r":
+		// r a second time is how the passage is dropped: the hand is on the
+		// key already and the mode it drops is the one it turned on
+		if m.mode == modeRepeat {
+			m.engine.ClearRepeat()
+			m.normal()
+			m.status = "the passage was let go"
+			return nil
+		}
+		m.setMode(modeRepeat)
+		m.status = "space marks the measure under the cursor, r lets it go"
+
+	case "R":
 		m.engine.Reset()
 		m.status = ""
 
@@ -470,8 +344,10 @@ func (m *Model) keyPractice(key string) tea.Cmd {
 	case "-", "_":
 		m.setSpeed(m.engine.Speed - 0.05)
 
-	case "esc":
-		m.goTo(screenLibrary)
+	// backspace is the way out of a song, the same as esc: the screen it goes
+	// back to is the list the song was opened from
+	case "esc", "backspace":
+		return m.goTo(screenMusic)
 	}
 
 	return nil
@@ -516,63 +392,26 @@ func (m *Model) setSpeed(speed float64) {
 	_ = m.cfg.Save()
 }
 
-func (m *Model) keyAnalyze(key string) tea.Cmd {
-	if key == "a" {
-		if m.current == nil {
-			m.fail = "pick a song on the library screen first"
-			return nil
-		}
-		return m.ask(askingRecording, "path to a recording of you playing it", "")
-	}
-	return nil
-}
-
-func (m *Model) keySetup(key string) tea.Cmd {
+func (m *Model) keyConfig(key string) tea.Cmd {
 	switch key {
 	case "l", "enter":
-		if m.device >= len(m.devices) {
-			return nil
-		}
-		chosen := m.devices[m.device]
-		m.cfg.Device = chosen.Index
-		m.cfg.Rate = chosen.Rate
-		if err := m.cfg.Save(); err != nil {
-			m.fail = err.Error()
-			return nil
-		}
-		m.status = "input is " + chosen.Name
-		return m.listen()
+		return m.keepConfig()
 
-	case "s":
-		m.status = "opening the spotify login in your browser"
-		return m.spotify("login")
+	case "h":
+		m.back()
+		return nil
+
+	case "esc":
+		if m.first != firstRunDone {
+			m.later()
+		}
+		return nil
+
+	case "r":
+		// a device plugged in after the app started is on no list read before it
+		m.status = "reading the input list again"
+		return m.askDevices()
 	}
 
 	return nil
-}
-
-// slug names the imported file after the guitar pro file and the track, so two
-// tracks of the same song do not overwrite each other.
-func slug(file, track string) string {
-	base := strings.TrimSuffix(file, filepath.Ext(file))
-	name := strings.ToLower(base + "-" + track)
-
-	var out strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			out.WriteRune(r)
-		default:
-			out.WriteRune('-')
-		}
-	}
-
-	return strings.Trim(collapse(out.String()), "-")
-}
-
-func collapse(text string) string {
-	for strings.Contains(text, "--") {
-		text = strings.ReplaceAll(text, "--", "-")
-	}
-	return text
 }

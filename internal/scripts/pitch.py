@@ -1,4 +1,4 @@
-"""yin pitch detection over numpy, shared by the live worker and the analyzer."""
+"""yin pitch detection over numpy, and the tracker that turns frames into notes."""
 
 import math
 
@@ -22,7 +22,7 @@ THRESHOLD = 0.12
 
 # below this rms the frame is silence and gets no note at all. a guitar
 # decaying into nothing would otherwise keep producing octave noise
-SILENCE_RMS = 0.006
+SILENCE_RMS = 0.012
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -118,10 +118,29 @@ class Tracker:
     a few of those come out an octave off. a note is only announced once the
     same pitch has held for MIN_FRAMES in a row, which also keeps the finger
     noise between two notes from being announced as a third one.
+
+    a note also has to start somewhere, and where it starts is a rise in the
+    level. a room with a fan or mains hum in it sits above the silence gate and
+    holds one pitch for as long as it is on, and holding a pitch is otherwise
+    all this asks for. what was already sounding can never begin a note, no
+    matter how long it holds.
     """
 
-    MIN_FRAMES = 2
-    MIN_CONFIDENCE = 0.55
+    MIN_FRAMES = 3
+    MIN_CONFIDENCE = 0.7
+
+    # how far over the floor the level has to jump to be the start of a note
+    ATTACK_RISE = 2.0
+
+    # the floor is what the room is doing. it follows the level down almost at
+    # once and up slowly, so a fan becomes the floor and a struck string does
+    # not have the time to
+    FLOOR_FALL = 0.5
+    FLOOR_RISE = 0.02
+
+    # the pitch settles a frame or two after the string is struck, so the rise
+    # that began the note still counts when it does. eight frames is 93 ms
+    ATTACK_MEMORY = 8
 
     def __init__(self, sample_rate):
         self.sample_rate = sample_rate
@@ -129,10 +148,32 @@ class Tracker:
         self.pending = None
         self.pending_count = 0
         self.silence = 0
+        self.floor = None
+        self.since_rise = self.ATTACK_MEMORY
+
+    def rose(self, rms):
+        """updates the floor with this frame and answers whether the level rose
+        over it, which is what the start of a note looks like."""
+        if self.floor is None:
+            # the first frame is the room and not a note, unless it is loud,
+            # which is what a recording trimmed to the first note starts with
+            self.floor = min(rms, SILENCE_RMS)
+
+        rose = rms > self.floor * self.ATTACK_RISE
+        rate = self.FLOOR_RISE if rms > self.floor else self.FLOOR_FALL
+        self.floor += (rms - self.floor) * rate
+
+        self.since_rise = 0 if rose else self.since_rise + 1
+        return rose
+
+    def attacked(self):
+        """whether a string was struck recently enough to have begun a note."""
+        return self.since_rise < self.ATTACK_MEMORY
 
     def push(self, frame, time):
         """feeds one frame, returns a note dict when a new note starts."""
         freq, confidence, rms = detect(frame, self.sample_rate)
+        self.rose(rms)
 
         if freq == 0.0 or confidence < self.MIN_CONFIDENCE:
             self.silence += 1
@@ -154,6 +195,12 @@ class Tracker:
 
         self.pending_count += 1
         if self.pending_count != self.MIN_FRAMES or midi == self.current:
+            return None
+
+        # nothing was sounding, so this has to be a string being struck. a note
+        # that follows another with no gap is a hammer on or a slide, and it
+        # has no attack of its own to look for
+        if self.current is None and not self.attacked():
             return None
 
         self.current = midi

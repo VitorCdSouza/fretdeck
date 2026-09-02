@@ -49,9 +49,15 @@ func (m *Model) fretboard(event song.Event, tuning []song.String) []string {
 func (m *Model) neckLine(str song.String, pressed map[int]int, first int) string {
 	fret, plays := pressed[str.Number]
 
-	open := " "
-	if plays && fret == 0 {
+	// the two marks a chord chart uses at the nut, and the answer to which
+	// strings the hand is meant to leave alone: a ring sounds open and a cross
+	// does not sound at all
+	open := styleFaint.Render("×")
+	switch {
+	case plays && fret == 0:
 		open = styleAccent.Render("○")
+	case plays:
+		open = " "
 	}
 
 	// the neck uses the same two weights the tab does, so a wound string is
@@ -69,7 +75,13 @@ func (m *Model) neckLine(str song.String, pressed map[int]int, first int) string
 		nut = "║"
 	}
 
-	line := "  " + styleString.Render(str.Label(m.tuningOf())) + " " + open + styleFaint.Render(nut)
+	// the letter lights up with the string, the same as it does over the tab
+	label := styleString.Render(str.Label(m.tuningOf()))
+	if plays {
+		label = styleAccent.Render(str.Label(m.tuningOf()))
+	}
+
+	line := "  " + label + " " + open + styleFaint.Render(nut)
 
 	for at := first; at < first+span; at++ {
 		if plays && fret == at {
@@ -122,5 +134,5 @@ func (m *Model) tuningOf() *song.Song {
 	if m.current != nil {
 		return m.current
 	}
-	return &song.Song{Tuning: standard}
+	return &song.Song{Tuning: m.instrument().Tuning}
 }

@@ -9,8 +9,8 @@ help: ## show this help
 build: ## compile the binary into the working directory
 	go build -o $(BINARY) ./cmd/fretdeck
 
-run: ## build and open the interface
-	go run ./cmd/fretdeck
+run: ## open the interface from the source, ARGS='-song x.json' passes flags on
+	go run ./cmd/fretdeck $(ARGS)
 
 test: ## go tests plus the python ones
 	go test ./...

@@ -2,8 +2,9 @@ package ui
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,20 +18,39 @@ import (
 	"github.com/VitorCdSouza/fretdeck/internal/practice"
 	"github.com/VitorCdSouza/fretdeck/internal/song"
 	"github.com/VitorCdSouza/fretdeck/internal/songsterr"
+	"github.com/VitorCdSouza/fretdeck/internal/ultimate"
 )
 
 type screen int
 
 const (
-	screenLibrary screen = iota
-	screenSearch
+	screenMusic screen = iota
 	screenPractice
+	screenSpotify
 	screenTuner
-	screenAnalyze
-	screenSetup
+	screenConfig
 )
 
-var screenNames = []string{"library", "search", "practice", "tuner", "analyze", "setup"}
+var screenNames = []string{"music", "practice", "spotify", "tuner", "config"}
+
+// tabScreens is what the navigation line has a button for. The practice screen
+// is not one of them: it is a song open on the music screen, reached by opening
+// a song and left with esc or backspace, so it is drawn as that screen and the
+// line stays as short as the number of places there are to walk to.
+var tabScreens = []screen{screenMusic, screenSpotify, screenTuner, screenConfig}
+
+// headerLines is the name, the two rows a button takes and the rule under
+// them. A click is answered by counting from it, so it is a constant and not a
+// guess.
+const headerLines = 4
+
+// clickable is one run of rows on the screen: the line the first of them is on,
+// the cursor index it stands for, and how many follow it.
+type clickable struct {
+	top   int
+	first int
+	count int
+}
 
 // frame is how often the clock and the animations are redrawn. Twenty five a
 // second is smooth and is already faster than the twenty levels a second the
@@ -38,6 +58,10 @@ var screenNames = []string{"library", "search", "practice", "tuner", "analyze", 
 const frame = 40 * time.Millisecond
 
 type bridgeMsg bridge.Event
+
+// lateMsg is the device list not coming back. Without it a worker that dies
+// between the asking and the answering leaves a screen reading forever.
+type lateMsg struct{}
 type frameMsg time.Time
 type songsMsg []*song.Song
 type errMsg struct{ text string }
@@ -57,17 +81,29 @@ type Model struct {
 	status string
 	fail   string
 
+	// songs is the library on disk. It is not a screen any more: what it
+	// answers is which row of a search is a song already here
 	songs   []*song.Song
-	pick    int
 	current *song.Song
 
-	// filter is the vim style search over the library, kept apart from the
-	// songsterr one so leaving the screen does not lose either
-	filter string
+	// recent is what has been read in and played, which is what the search
+	// screen shows with nothing typed
+	recent config.Recent
+
+	// removing says d was pressed on a song that is on disk and the question
+	// is on the screen. Any key answers it, so the cursor cannot move under it
+	removing bool
+
+	// listing says the device list has been asked for and has not come back
+	listing bool
 
 	// helping puts the key map over whatever screen is open. It is a mode of
 	// the whole app rather than of one screen, since the map is too
 	helping bool
+
+	// mode is normal, insert or repeat, and esc is the way back from either of
+	// the two. It is the app's and not a screen's, since the palette follows it
+	mode mode
 
 	// pendingG is the first half of gg. Vim has a two key motion and so does
 	// this, and the state has to live somewhere
@@ -81,32 +117,59 @@ type Model struct {
 	// drawing what the engine already knows, not a mode of its own
 	highway bool
 
-	// the search screen, over songsterr and over a spotify playlist
+	// the music screen, over ultimate guitar and over what was played, with
+	// songsterr answering for the difficulty beside a row
 	songsterr *songsterr.Client
+	ultimate  *ultimate.Client
 	query     string
 	results   []finding
 	found     int
 	seeking   bool
 	source    source
+	lookups   chan lookupMsg
+
+	// the spotify screen, which is a step at a time: the login, the playlists
+	// and the songs of the one that was opened. linked is whether there is a
+	// session at all, read off the credentials file and not asked again while
+	// the screen is being drawn
+	linked    bool
+	pulling   bool
+	pulled    bool
+	stage     spotifyStage
+	picked    int
 	playlist  string
 	playlists []playlistInfo
-	lookups   chan lookupMsg
+	tracks    []finding
 
 	level   levelPayload
 	silence time.Time
 
 	devices []deviceInfo
-	device  int
 
-	input     textinput.Model
-	asking    asking
-	tracks    []trackInfo
-	track     int
-	pending   string
-	report    *reportPayload
-	progress  float64
-	running   bool
-	reportRow int
+	// refreshed is the input the list was last read again for. A worker
+	// reading something no list ever shows would otherwise ask forever
+	refreshed string
+
+	// configRow is the one cursor of the config screen. The instruments and the
+	// inputs are two lists there and it walks both, so there is no focus to keep
+	configRow int
+
+	// first is which of the two first run questions is still open. An answer
+	// that was kept is not asked about again
+	first firstRun
+
+	// clicks is where the rows of the list were drawn last, so a click can be
+	// turned into the row under it. Only the drawing knows where a row landed
+	clicks []clickable
+
+	// the pages read for the preview, and the clock that says the cursor has
+	// come to rest on a row long enough to be worth reading one
+	pages   map[string]*page
+	pointed int
+	since   time.Time
+
+	input  textinput.Model
+	asking asking
 }
 
 // asking says what the one text field on screen is for. There is a single
@@ -115,38 +178,95 @@ type asking int
 
 const (
 	askingNothing asking = iota
-	askingImport
-	askingRecording
 	askingQuery
-	askingFilter
 )
 
+// firstRun is what the config screen still has to ask. The two questions are asked in
+// that order, and a run that has both answers already asks neither.
+type firstRun int
+
+const (
+	firstRunDone firstRun = iota
+	firstRunInstrument
+	firstRunInput
+)
+
+// Options is what the command line can say. It is there so the app can be
+// opened on a song, or on an input, without walking the screens to get there
+// on every run while it is being worked on.
+type Options struct {
+	Song   string
+	Device int
+}
+
 func New() *Model {
+	return NewWith(Options{Device: -1})
+}
+
+func NewWith(options Options) *Model {
 	input := textinput.New()
 	input.Prompt = "  "
 	input.CharLimit = 512
 
 	cfg := config.Load()
+	if options.Device >= 0 {
+		// for one run and not kept: a flag is not somebody changing their mind
+		cfg.Device, cfg.Source, cfg.Card = options.Device, "", ""
+	}
 
-	return &Model{
+	first, opening := firstRunDone, screenMusic
+	switch {
+	case cfg.Instrument == "":
+		first, opening = firstRunInstrument, screenConfig
+	case cfg.Device < 0:
+		first, opening = firstRunInput, screenConfig
+	}
+
+	m := &Model{
 		cfg:       cfg,
+		recent:    config.LoadRecent(),
 		worker:    bridge.NewWorker(),
 		events:    make(chan bridge.Event, 256),
 		lookups:   make(chan lookupMsg, 256),
 		songsterr: songsterr.New(),
-		device:    cfg.Device,
+		ultimate:  ultimate.New(),
 		input:     input,
+		first:     first,
+		screen:    opening,
+		linked:    haveSession(),
 	}
+	if m.linked {
+		m.stage = stagePlaylists
+	}
+	m.songsterr.Family = m.family()
+	m.showRecent()
+
+	if options.Song != "" {
+		m.openPath(options.Song)
+	}
+
+	return m
+}
+
+// openPath opens a song by its path, which is what the flag gives. A path that
+// does not read leaves the app where it was with the reason on the bar.
+func (m *Model) openPath(path string) {
+	loaded, err := song.Load(expand(path))
+	if err != nil {
+		m.fail = err.Error()
+		return
+	}
+
+	m.open(loaded)
 }
 
 func (m *Model) Init() tea.Cmd {
 	if err := m.worker.Start(); err != nil {
 		m.fail = err.Error()
-	} else {
-		_ = m.worker.Send(bridge.Command{Action: "devices"})
+		return tea.Batch(m.waitWorker(), m.waitOneshot(), m.waitLookup(), m.loadSongs(), tick())
 	}
 
-	return tea.Batch(m.waitWorker(), m.waitOneshot(), m.waitLookup(), m.loadSongs(), tick())
+	return tea.Batch(m.waitWorker(), m.waitOneshot(), m.waitLookup(), m.loadSongs(), tick(), m.askDevices())
 }
 
 // waitWorker and waitOneshot are two mouths feeding the same Update. The live
@@ -183,18 +303,53 @@ func (m *Model) loadSongs() tea.Cmd {
 func (m *Model) run(script string, args ...string) tea.Cmd {
 	events := m.events
 	return func() tea.Msg {
-		if err := bridge.Run(context.Background(), script, args, events); err != nil {
-			events <- bridge.Event{Event: bridge.EventLog, Message: err.Error()}
+		err := bridge.Run(context.Background(), script, args, events)
+
+		// a script that ran and ended badly has already said why in an event of
+		// its own, and only one that never ran at all is news
+		var ended *exec.ExitError
+		if err != nil && !errors.As(err, &ended) {
+			events <- bridge.Event{Event: bridge.EventScriptGone, Message: err.Error()}
 		}
 		return nil
 	}
 }
 
+// askDevices reads the input list off portaudio. It is asked for at startup
+// and again on demand, since a device plugged in after the app started is on
+// no list read before it.
+//
+// The worker is started again when it is not there. An empty list is what a
+// worker that died looks like from here, and a refresh is what somebody
+// presses when the list is empty.
+func (m *Model) askDevices() tea.Cmd {
+	if !m.worker.Running() {
+		if err := m.worker.Start(); err != nil {
+			m.fail = err.Error()
+			return nil
+		}
+	}
+
+	if err := m.worker.Send(bridge.Command{Action: "devices"}); err != nil {
+		m.fail = err.Error()
+		return nil
+	}
+
+	m.listing = true
+	return tea.Tick(6*time.Second, func(time.Time) tea.Msg { return lateMsg{} })
+}
+
 func (m *Model) listen() tea.Cmd {
-	device, rate := m.cfg.Device, m.cfg.Rate
+	command := bridge.Command{
+		Action: "listen",
+		Device: m.cfg.Device,
+		Rate:   m.cfg.Rate,
+		Source: m.cfg.Source,
+		Card:   m.cfg.Card,
+	}
 	worker := m.worker
 	return func() tea.Msg {
-		_ = worker.Send(bridge.Command{Action: "listen", Device: device, Rate: rate})
+		_ = worker.Send(command)
 		return nil
 	}
 }
@@ -210,12 +365,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.engine != nil {
 			m.engine.Tick(time.Time(msg))
 		}
-		return m, tick()
+		return m, tea.Batch(tick(), m.resting(time.Time(msg)))
 
 	case songsMsg:
 		m.songs = msg
-		if m.pick >= len(m.songs) {
-			m.pick = 0
+		if m.source == sourceRecent {
+			m.showRecent()
+		}
+		m.markOwned()
+		return m, nil
+
+	case lateMsg:
+		if m.listing {
+			m.listing = false
+			m.fail = "the audio worker did not answer. press r to ask it again"
 		}
 		return m, nil
 
@@ -227,35 +390,44 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fail = msg.text
 		return m, nil
 
-	case searchMsg:
+	case ultimateMsg:
 		m.seeking = false
 		if msg.err != nil {
 			m.fail = msg.err.Error()
 			return m, nil
 		}
-		m.showSongs(msg.songs)
+		m.showTabs(msg.results)
 		m.status = ""
+		return m, m.lookupSongs(m.results)
+
+	case grabMsg:
+		m.seeking = false
+		if msg.err != nil {
+			m.fail = msg.err.Error()
+			return m, nil
+		}
+		return m, m.grabbed(msg)
+
+	case pageMsg:
+		m.read(msg)
 		return m, nil
 
 	case lookupMsg:
-		if msg.index < len(m.results) {
-			item := &m.results[msg.index]
-			item.State = lookupMissing
-			if msg.found {
-				item.State, item.Level, item.URL = lookupDone, msg.level, msg.url
-			}
-		}
-		if m.stillLooking() == 0 {
+		m.answered(msg)
+		// the sort waits for the whole playlist: half a list is not an order
+		if len(m.tracks) > 0 && stillLooking(m.tracks) == 0 {
 			m.sortByLevel()
+		}
+		if stillLooking(m.results) == 0 && stillLooking(m.tracks) == 0 {
 			m.status = ""
 		}
 		return m, m.waitLookup()
 
-	case watchMsg:
-		return m, m.watched(msg)
-
 	case bridgeMsg:
 		return m, m.handle(bridge.Event(msg))
+
+	case tea.MouseMsg:
+		return m, m.mouse(msg)
 
 	case tea.KeyMsg:
 		return m, m.key(msg)
@@ -270,15 +442,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handle(event bridge.Event) tea.Cmd {
 	next := m.waitWorker()
 	switch event.Event {
-	case bridge.EventTracks, bridge.EventImported, bridge.EventImportError,
-		bridge.EventProgress, bridge.EventReport, bridge.EventAnalyzeError,
-		bridge.EventSpotifyLog, bridge.EventSpotifyReady, bridge.EventSpotifyError,
-		bridge.EventSpotifyPlaylists, bridge.EventSpotifyTracks:
+	case bridge.EventSpotifyLog, bridge.EventSpotifyReady, bridge.EventSpotifyError,
+		bridge.EventSpotifyPlaylists, bridge.EventSpotifyTracks,
+		bridge.EventScriptLog, bridge.EventScriptGone:
 		next = m.waitOneshot()
 	case bridge.EventLog:
-		// a log can come from either mouth, and asking the wrong one for the
-		// next event would hang that side forever. the live worker is the one
-		// that must never stall, so it gets the benefit of the doubt
+		// a log of the worker's, since a one shot writes EventScriptLog. asking
+		// the wrong mouth for the next event would hang that side forever
 		next = m.waitWorker()
 	}
 
@@ -287,7 +457,35 @@ func (m *Model) handle(event bridge.Event) tea.Cmd {
 		var payload devicesPayload
 		if err := event.Decode(&payload); err == nil {
 			m.devices = payload.Devices
-			m.adoptDevice()
+			m.listing = false
+
+			// nothing is opened while the first run is still asking
+			if m.first == firstRunInstrument {
+				return next
+			}
+			if m.first == firstRunInput {
+				m.startingRow()
+				m.status = plural(len(m.devices), "input") + " on the list"
+				return next
+			}
+
+			m.configRow = clamp(m.configRow, m.configCount())
+			if m.screen == screenConfig {
+				m.status = plural(len(m.devices), "input") + " on the list"
+			}
+
+			found, ok := m.haveDevice()
+			if !ok {
+				m.lostDevice()
+				if m.cfg.Source != "" || m.cfg.Card != "" {
+					// the worker waits for it by name, so plugging it back in
+					// is enough and there is nothing to press
+					return tea.Batch(next, m.listen())
+				}
+				return next
+			}
+
+			m.cfg.Rate = found.Rate
 			return tea.Batch(next, m.listen())
 		}
 
@@ -304,73 +502,64 @@ func (m *Model) handle(event bridge.Event) tea.Cmd {
 		}
 
 	case bridge.EventListening:
-		m.status = "listening on " + m.deviceName(m.cfg.Device)
+		var payload listeningPayload
+		if err := event.Decode(&payload); err == nil {
+			m.fail = ""
+			if again := m.keepInput(payload); again != nil {
+				return tea.Batch(next, again)
+			}
+			m.status = "listening on " + m.deviceName()
+		}
+
+	case bridge.EventListenWaiting:
+		// the worker is opening it again on its own, so this is what is
+		// happening and not what went wrong
+		m.status = event.Message
 
 	case bridge.EventListenError, bridge.EventError, bridge.EventAudioWarning:
+		m.listing = false
 		m.fail = event.Message
 
-	case bridge.EventTracks:
-		var payload tracksPayload
-		if err := event.Decode(&payload); err == nil {
-			m.tracks = payload.Tracks
-			m.track = firstPlayable(payload.Tracks)
-			m.asking = askingNothing
-			m.input.Blur()
-		}
-
-	case bridge.EventImported:
-		var payload importedPayload
-		if err := event.Decode(&payload); err == nil {
-			m.tracks = nil
-			m.status = fmt.Sprintf("%s imported, %d notes over %d measures",
-				payload.Title, payload.Notes, payload.Measures)
-			return tea.Batch(next, m.loadSongs())
-		}
-
-	case bridge.EventImportError, bridge.EventAnalyzeError:
+	case bridge.EventScriptGone:
+		m.pulling = false
 		m.fail = event.Message
-		m.running = false
-		m.tracks = nil
+
+	case bridge.EventWorkerGone:
+		m.listing = false
+		m.devices = nil
+		m.fail = event.Message + ". press r on the config screen to start it again"
 
 	case bridge.EventSpotifyReady:
+		m.linked = true
 		m.status = "spotify connected"
+		return tea.Batch(next, m.askPlaylists())
 
 	case bridge.EventSpotifyLog:
 		m.status = event.Message
 
 	case bridge.EventSpotifyError:
-		m.seeking = false
+		m.pulling = false
 		m.fail = event.Message
+		// the script answers this with no credentials file, and only the button can
+		if !haveSession() {
+			m.linked, m.stage = false, stageLogin
+		}
 
 	case bridge.EventSpotifyPlaylists:
 		var payload playlistsPayload
 		if err := event.Decode(&payload); err == nil {
 			m.playlists = payload.Playlists
-			m.found = 0
-			m.seeking = false
+			m.picked = 0
+			m.pulling = false
 			m.status = ""
 		}
 
 	case bridge.EventSpotifyTracks:
-		var payload tracksPayload2
+		var payload tracksPayload
 		if err := event.Decode(&payload); err == nil {
 			return tea.Batch(next, m.showTracks(payload.Tracks))
 		}
 
-	case bridge.EventProgress:
-		var payload progressPayload
-		if err := event.Decode(&payload); err == nil && payload.Total > 0 {
-			m.progress = float64(payload.Done) / float64(payload.Total)
-		}
-
-	case bridge.EventReport:
-		var payload reportPayload
-		if err := event.Decode(&payload); err == nil {
-			m.report = &payload
-			m.reportRow = 0
-			m.running = false
-			m.progress = 1
-		}
 	}
 
 	return next
@@ -391,44 +580,122 @@ func (m *Model) onNote(note notePayload) {
 	m.engine.Heard(note.Midi, time.Now())
 }
 
-// adoptDevice keeps the config pointing at something that exists. A device
-// index is not stable across reboots, so the saved one is checked and the
-// system default is taken when it is gone.
-func (m *Model) adoptDevice() {
-	for _, device := range m.devices {
-		if device.Index == m.cfg.Device {
-			return
+// chosen is whether a row of the list is the input that was kept. A name is
+// what says so wherever the sound server gives one, since an index is
+// renumbered by anything plugged in after the choice was made.
+//
+// The card answers when the name does not. A node carries the profile of its
+// card in its name, so the same pedal is one name under duplex and another
+// under pro audio, and the name that was kept is on no list until somebody
+// switches the profile back by hand. That was the whole of the trouble.
+func (m *Model) chosen(device deviceInfo) bool {
+	if m.cfg.Source != "" || device.ID != "" {
+		if device.ID == m.cfg.Source {
+			return true
 		}
-	}
-	for _, device := range m.devices {
-		if device.Default {
-			m.cfg.Device = device.Index
-			m.cfg.Rate = device.Rate
-			return
+		if m.listed(m.cfg.Source) {
+			return false
 		}
+		if m.cfg.Card != "" && device.Card == m.cfg.Card {
+			return true
+		}
+		return stem(m.cfg.Source) != "" && stem(device.ID) == stem(m.cfg.Source)
 	}
-	if len(m.devices) > 0 {
-		m.cfg.Device = m.devices[0].Index
-		m.cfg.Rate = m.devices[0].Rate
-	}
+	return device.Index == m.cfg.Device
 }
 
-func (m *Model) deviceName(index int) string {
+// stem is a node name without the profile on the end of it, which is what an
+// input kept before the card was written down is found by. A name of one part
+// has none: bluez_input alone is every bluetooth input and not one of them.
+func stem(name string) string {
+	if strings.Count(name, ".") < 2 {
+		return ""
+	}
+	return name[:strings.LastIndex(name, ".")]
+}
+
+// listed is whether the input that was kept is on the list under its own name.
+func (m *Model) listed(source string) bool {
+	if source == "" {
+		return false
+	}
 	for _, device := range m.devices {
-		if device.Index == index {
+		if device.ID == source {
+			return true
+		}
+	}
+	return false
+}
+
+// keepInput writes down what the worker really opened. It is not always what
+// it was asked for: a card in another profile is found by the card and answers
+// under a name the config has never seen, and keeping that name is what stops
+// the next run looking for one that is gone.
+func (m *Model) keepInput(payload listeningPayload) tea.Cmd {
+	if payload.Source == "" {
+		return nil
+	}
+
+	if payload.Source != m.cfg.Source || payload.Card != m.cfg.Card {
+		m.cfg.Source, m.cfg.Card = payload.Source, payload.Card
+		if err := m.cfg.Save(); err != nil {
+			m.fail = err.Error()
+		}
+	}
+
+	// an input opened after the list was read is on no row of it, and the
+	// screen would name something else while the guitar is being heard
+	if m.listed(payload.Source) || m.refreshed == payload.Source {
+		return nil
+	}
+	m.refreshed = payload.Source
+	return m.askDevices()
+}
+
+// haveDevice is the input that was kept, when it is still on the list. The
+// rate comes back with it, since the list is what says which one it takes.
+func (m *Model) haveDevice() (deviceInfo, bool) {
+	for _, device := range m.devices {
+		if m.chosen(device) {
+			return device, true
+		}
+	}
+	return deviceInfo{}, false
+}
+
+// lostDevice is the one thing that reopens a question the first run has already
+// answered. A portaudio index is not stable, so an interface plugged in after
+// the app started renumbers the input that was chosen, and taking the system
+// default without a word is how somebody ends up practising into the laptop
+// microphone. The saved answer is left alone: plug the interface back in, read
+// the list again and it is found where it was.
+func (m *Model) lostDevice() {
+	m.screen = screenConfig
+	m.startingRow()
+	m.fail = "the input you chose is not there. it is taken up when it comes back, or pick another one"
+}
+
+// instrument is what the config was told is plugged in. The tuner and the neck
+// fall back on it whenever there is no song to read a tuning from.
+func (m *Model) instrument() song.Instrument {
+	return song.Chosen(m.cfg.Instrument)
+}
+
+// family is the half of the songsterr catalogue that answers for it.
+func (m *Model) family() songsterr.Family {
+	if m.instrument().Bass {
+		return songsterr.Bass
+	}
+	return songsterr.Guitar
+}
+
+func (m *Model) deviceName() string {
+	for _, device := range m.devices {
+		if m.chosen(device) {
 			return device.Name
 		}
 	}
 	return "no input"
-}
-
-func firstPlayable(tracks []trackInfo) int {
-	for index, track := range tracks {
-		if track.Playable {
-			return index
-		}
-	}
-	return 0
 }
 
 // expand turns a path typed with a tilde into one the file system knows.
@@ -444,70 +711,6 @@ func expand(path string) string {
 	return filepath.Join(home, strings.TrimPrefix(path, "~"))
 }
 
-// showTracks turns a playlist into rows and sends every one of them off to be
-// looked up. Nothing is known about difficulty until songsterr answers.
-func (m *Model) showTracks(tracks []spotifyTrack) tea.Cmd {
-	m.seeking = false
-	m.results = make([]finding, 0, len(tracks))
-	for _, track := range tracks {
-		m.results = append(m.results, finding{
-			Artist: track.Artist,
-			Title:  track.Title,
-			State:  lookupWaiting,
-			Have:   m.owned(track.Artist, track.Title),
-		})
-	}
-	m.found = 0
-	m.status = fmt.Sprintf("looking %d up on songsterr", len(tracks))
-
-	return m.lookupTracks(tracks)
-}
-
-func (m *Model) stillLooking() int {
-	waiting := 0
-	for _, item := range m.results {
-		if item.State == lookupWaiting {
-			waiting++
-		}
-	}
-	return waiting
-}
-
-// watched keeps the poll going until a file shows up or the wait runs out. A
-// file that does show up is read for its tracks, and the library screen picks
-// up the question of which one to import.
-func (m *Model) watched(msg watchMsg) tea.Cmd {
-	if !msg.done {
-		return watchDownloads(msg.dir, msg.since, msg.deadline)
-	}
-	if msg.path == "" {
-		m.status = "stopped watching for a download"
-		return nil
-	}
-
-	m.pending = msg.path
-	m.screen = screenLibrary
-	m.status = "found " + filepath.Base(msg.path)
-
-	return m.run("gpimport.py", msg.path)
-}
-
-// problemCount is how many rows the analyze screen can scroll through, which
-// is only what went wrong.
-func (m *Model) problemCount() int {
-	if m.report == nil {
-		return 0
-	}
-
-	count := 0
-	for _, note := range m.report.Notes {
-		if note.Kind != "hit" {
-			count++
-		}
-	}
-	return count
-}
-
 func credentialsPath() (string, error) {
 	return config.Credentials()
 }
@@ -516,10 +719,16 @@ func (m *Model) Close() {
 	m.worker.Close()
 }
 
+// Mouse says whether the terminal should be asked for mouse events, which is
+// what the program is started with.
+func (m *Model) Mouse() bool { return m.cfg.Mouse }
+
 func (m *Model) View() string {
 	if m.width == 0 {
 		return ""
 	}
+
+	m.clicks = nil
 
 	if m.helping {
 		return strings.Join([]string{m.header(), m.viewHelp(), m.footer()}, "\n")
@@ -527,70 +736,170 @@ func (m *Model) View() string {
 
 	body := ""
 	switch m.screen {
-	case screenLibrary:
-		body = m.viewLibrary()
-	case screenSearch:
+	case screenMusic:
 		body = m.viewSearch()
+	case screenSpotify:
+		body = m.viewSpotify()
 	case screenPractice:
 		body = m.viewPractice()
 	case screenTuner:
 		body = m.viewTuner()
-	case screenAnalyze:
-		body = m.viewAnalyze()
-	case screenSetup:
-		body = m.viewSetup()
+	case screenConfig:
+		body = m.viewConfig()
 	}
 
 	return strings.Join([]string{m.header(), body, m.footer()}, "\n")
 }
 
-// header is the one line that is the same on every screen: the name, where you
-// are, and what the app is hearing right now.
+// header is what is the same on every screen: the name, and under it the
+// buttons that walk between the screens.
 func (m *Model) header() string {
-	tabs := make([]string, len(screenNames))
-	for index, name := range screenNames {
-		if screen(index) == m.screen {
-			tabs[index] = styleTabOn.Render(name)
-			continue
-		}
-		tabs[index] = styleTab.Render(name)
-	}
-
-	left := styleBrand.Render("fretdeck") + "  " +
-		strings.Join(tabs, styleFaint.Render(" · "))
-
-	right := styleFaint.Render("in ") + styleSubtle.Render(truncate(m.deviceName(m.cfg.Device), 28))
-	if m.level.Freq > 0 && time.Since(m.silence) < 2*time.Second {
-		right = styleOk.Render(m.level.Name) + "  " + right
-	}
-
-	return pad(left, right, m.width) + "\n" + rule(m.width)
+	return styleBrand.Render("fretdeck") + "\n" + m.tabs() + "\n" + rule(m.width)
 }
 
-// footer carries the keys of the screen on the left and whatever the app has
-// to say on the right. An error takes the line over, since it is the only
-// thing worth reading when there is one.
+// tabs is the navigation line. Every screen is a button of its own and the two
+// keys that walk between them sit at the edges, each on the side it walks
+// towards.
+func (m *Model) tabs() string {
+	here := m.tabHere()
+
+	boxes := make([]string, 0, 2*len(tabScreens)-1)
+	for index, which := range tabScreens {
+		box := styleTabBox.Render(styleTab.Render(screenNames[which]))
+		if index == here {
+			box = styleTabBoxOn.Render(styleTabOn.Render(screenNames[which]))
+		}
+		if index > 0 {
+			boxes = append(boxes, strings.Repeat(" ", tabSpace))
+		}
+		boxes = append(boxes, box)
+	}
+
+	// the keys sit on the row the names are on, not on the row of the bars
+	strip := lipgloss.JoinHorizontal(lipgloss.Top, boxes...)
+	line := lipgloss.JoinHorizontal(lipgloss.Top,
+		navKey("H"), tabGap, strip, tabGap, navKey("L"))
+
+	return lipgloss.NewStyle().PaddingLeft(m.tabLead()).Render(line)
+}
+
+func navKey(letter string) string {
+	return styleFaint.Render("[") + styleAccent.Render(letter) + styleFaint.Render("]")
+}
+
+// tabGap is what stands between a key and the buttons it walks through. The two
+// belong to the strip and not to the edges of the window, so they sit against
+// it and the whole of it is what is centred.
+const tabGap = "  "
+
+const (
+	// tabPad is the space each side of a name, inside the border
+	tabPad = 1
+	// tabSpace is what stands between one button and the next, which is the
+	// whole of what separates them now the border is under and not around
+	tabSpace = 2
+	// tabTop is the line of the window the buttons start on
+	tabTop = 1
+	// tabRows is the name and the bar under it, and both of them are clickable
+	tabRows = 2
+)
+
+// tabWidth is a whole button: the name and the padding each side of it. The
+// border is under it and takes no columns of its own.
+func tabWidth(name string) int {
+	return len(name) + 2*tabPad
+}
+
+// tabLead is how far in the navigation line starts. The drawing and the click
+// both read it, so the two cannot drift apart.
+func (m *Model) tabLead() int {
+	whole := 2*(lipgloss.Width(navKey("H"))+len(tabGap)) + stripWidth()
+
+	lead := (m.width - whole) / 2
+	if lead < 0 {
+		lead = 0
+	}
+	return lead
+}
+
+// stripWidth is the buttons and the space between them.
+func stripWidth() int {
+	width := 0
+	for index, which := range tabScreens {
+		if index > 0 {
+			width += tabSpace
+		}
+		width += tabWidth(screenNames[which])
+	}
+	return width
+}
+
+// tabHere is the button that is lit. A song open lights the music screen: that
+// is where it was opened from and where leaving it goes back to.
+func (m *Model) tabHere() int {
+	for index, which := range tabScreens {
+		if which == m.screen {
+			return index
+		}
+	}
+	return 0
+}
+
+// screenAt is the screen whose button is under a column of the navigation line.
+func (m *Model) screenAt(x int) (screen, bool) {
+	at := m.tabLead() + lipgloss.Width(navKey("H")) + len(tabGap)
+	for _, which := range tabScreens {
+		width := tabWidth(screenNames[which])
+		if x >= at && x < at+width {
+			return which, true
+		}
+		at += width + tabSpace
+	}
+	return 0, false
+}
+
+// footer carries the keys of the screen on the left, and on the right whatever
+// the app has to say and the input in the corner. An error takes the line over,
+// since it is the only thing worth reading when there is one.
 func (m *Model) footer() string {
 	if m.fail != "" {
 		return rule(m.width) + "\n" + styleBad.Render(truncate(m.fail, m.width))
 	}
 
-	keys := m.bar()
-	if m.status == "" {
-		return rule(m.width) + "\n" + truncate(keys, m.width)
+	// the keys are served first and the input keeps its corner. what is left
+	// in the middle is what the status gets, since it is the line that can be
+	// missed without anything being lost
+	hearing := m.hearing()
+	keys := m.bar(m.width - lipgloss.Width(hearing) - 6)
+
+	right := hearing
+	if m.status != "" {
+		room := m.width - lipgloss.Width(keys) - lipgloss.Width(hearing) - 6
+		if text := truncate(m.status, room); lipgloss.Width(text) > 8 {
+			right = styleSubtle.Render(text) + "   " + hearing
+		}
 	}
 
-	return rule(m.width) + "\n" +
-		pad(keys, styleSubtle.Render(truncate(m.status, m.width/2)), m.width)
+	return rule(m.width) + "\n" + truncate(pad(keys, right, m.width), m.width)
 }
 
-// space is how many lines the body may use, once the two lines of the header
-// and the two of the footer are taken out.
+// hearing is the input and the note coming in on it, in the corner furthest
+// from the tab, since it is read while nothing else is.
+func (m *Model) hearing() string {
+	text := styleFaint.Render("in ") + styleSubtle.Render(truncate(m.deviceName(), 20))
+	if m.level.Freq > 0 && time.Since(m.silence) < 2*time.Second {
+		text = styleOk.Render(m.level.Name) + "  " + text
+	}
+	return text
+}
+
+// space is how many lines the body may use, once the header and the two lines
+// of the footer are taken out.
 func (m *Model) space() int {
-	if m.height < 10 {
+	if m.height < 12 {
 		return 6
 	}
-	return m.height - 5
+	return m.height - headerLines - 3
 }
 
 func blank(lines int) string {

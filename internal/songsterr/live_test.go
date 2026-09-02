@@ -24,9 +24,9 @@ func TestLive(t *testing.T) {
 		if index > 4 {
 			break
 		}
-		track, ok := item.Guitar()
+		track, ok := item.Played(Guitar)
 		fmt.Printf("%-34s %-22s level %d  guitar %v %s\n",
-			item.Title, item.Artist, item.Difficulty(), ok, track.Instrument)
+			item.Title, item.Artist, item.Difficulty(Guitar), ok, track.Instrument)
 	}
 
 	best, ok := Best(songs, "Metallica", "Nothing Else Matters - Remastered")

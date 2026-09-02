@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +43,10 @@ func (m *Model) viewPractice() string {
 
 	for _, row := range view.Rows {
 		lines = append(lines, m.tabRow(row))
+	}
+
+	if band := m.repeatBand(view); band != "" {
+		lines = append(lines, band)
 	}
 
 	lines = append(lines, "", m.callout())
@@ -93,8 +99,101 @@ func (m *Model) practiceHead() string {
 	}
 
 	measure := styleSubtle.Render(fmt.Sprintf("measure %d", m.measure()))
+	if m.engine.Repeats(m.measure()) {
+		measure = styleAccent.Render(fmt.Sprintf("measure %d", m.measure()))
+	}
 
-	return pad("  "+title, strings.Join([]string{mode, measure, accuracy}, styleFaint.Render("   ")), m.width)
+	parts := []string{mode}
+	if repeat := m.repeatHead(); repeat != "" {
+		parts = append(parts, repeat)
+	}
+	parts = append(parts, measure, accuracy)
+
+	right := strings.Join(parts, styleFaint.Render("   "))
+	left := truncate("  "+title, m.width-lipgloss.Width(right)-2)
+
+	return pad(left, right, m.width)
+}
+
+// repeatHead is what the passage being looped over is called, and the number
+// of times round it has been. The mode says so even with nothing picked yet,
+// since a mode with no sign of itself is one nobody knows they are in.
+func (m *Model) repeatHead() string {
+	if !m.engine.Looping() {
+		if m.mode == modeRepeat {
+			return styleAccent.Render("repeat")
+		}
+		return ""
+	}
+
+	text := styleAccent.Render("repeat " + measureList(m.engine.Measures()))
+	if passes := m.engine.Passes(); passes > 0 {
+		text += styleFaint.Render(fmt.Sprintf("  ×%d", passes))
+	}
+	return text
+}
+
+// pickRepeat marks the measure under the cursor, or lets it go. The loop is
+// closed as it is marked, so a passage behind the cursor starts repeating at
+// once instead of the next time the song runs off its end.
+func (m *Model) pickRepeat() {
+	m.engine.ToggleRepeat(m.measure())
+	m.engine.Loop(time.Now())
+
+	if !m.engine.Looping() {
+		m.status = "nothing is being repeated"
+		return
+	}
+	m.status = "repeating " + measureList(m.engine.Measures())
+}
+
+// repeatBand is the line under the tab that says which measures are looped
+// over. It is drawn from the spans the tab reports, so the mark cannot drift
+// off the columns above it, and it is an empty line while nothing is picked so
+// the tab does not jump when the first one is.
+func (m *Model) repeatBand(view song.View) string {
+	if !m.engine.Looping() && m.mode != modeRepeat {
+		return ""
+	}
+
+	total := 0
+	for _, span := range view.Spans {
+		if end := span.At + span.Width; end > total {
+			total = end
+		}
+	}
+
+	line := []rune(strings.Repeat(" ", total))
+	for _, span := range view.Spans {
+		if !m.engine.Repeats(span.Measure) {
+			continue
+		}
+		for at := span.At; at < span.At+span.Width && at < len(line); at++ {
+			line[at] = '━'
+		}
+	}
+
+	return strings.Repeat(" ", tabIndent) + styleAccent.Render(strings.TrimRight(string(line), " "))
+}
+
+// measureList writes the picked measures the way somebody would say them, so
+// four bars in a row read as one passage and not as four numbers.
+func measureList(measures []int) string {
+	parts := make([]string, 0, len(measures))
+	for index := 0; index < len(measures); {
+		end := index
+		for end+1 < len(measures) && measures[end+1] == measures[end]+1 {
+			end++
+		}
+		if end == index {
+			parts = append(parts, strconv.Itoa(measures[index]))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d-%d", measures[index], measures[end]))
+		}
+		index = end + 1
+	}
+
+	return strings.Join(parts, " ")
 }
 
 func (m *Model) measure() int {
@@ -120,15 +219,22 @@ func (m *Model) marker(view song.View) string {
 	return strings.Repeat(" ", offset) + styleAccent.Render(marker)
 }
 
-// tabRow paints one string. What is behind the cursor is dimmed, what is under
-// it takes the colour of the verdict, and what is coming stays readable.
+// tabRow paints one string. What is behind the cursor is dimmed, the fret under
+// it takes the colour of the verdict, and what is coming stays readable. The
+// string letter lights up with the fret, so which strings the column asks for
+// is answered at the left edge without counting lines across the screen.
 func (m *Model) tabRow(row song.Row) string {
 	here := styleTabHere
 	if !m.engine.Done() && m.engine.Result(m.engine.Cursor()).Verdict == practice.Wrong {
 		here = styleBad
 	}
 
-	return "  " + styleString.Render(row.Label) + "  " +
+	label := styleString.Render(row.Label)
+	if row.At != "" {
+		label = here.Render(row.Label)
+	}
+
+	return "  " + label + "  " +
 		styleTabPast.Render(row.Before) + here.Render(row.At) + styleTabNext.Render(row.After)
 }
 
@@ -206,26 +312,40 @@ func (m *Model) metronome() string {
 	return strings.Join(dots, " ") + "   "
 }
 
-// chordName is what to call the event out loud. One note is its name, a chord
-// is its lowest note and how many strings ring with it.
+// sounding is the notes of an event from the lowest up. They arrive in the
+// order the file wrote them, which is neither the order the strings are in nor
+// the order somebody would call them out.
+func sounding(event song.Event) []song.Note {
+	notes := append([]song.Note(nil), event.Notes...)
+	sort.SliceStable(notes, func(a, b int) bool { return notes[a].Midi < notes[b].Midi })
+	return notes
+}
+
+// chordName is what to call the event out loud. One note is its name, two are
+// both names, and anything thicker is the lowest note and how many ring over
+// it. The count says "notes" because a bare +2 beside a note name reads as two
+// semitones.
 func chordName(event song.Event) string {
-	if len(event.Notes) == 0 {
+	notes := sounding(event)
+	switch len(notes) {
+	case 0:
 		return ""
+	case 1:
+		return song.NoteName(notes[0].Midi)
+	case 2:
+		return song.NoteName(notes[0].Midi) + " " + song.NoteName(notes[1].Midi)
 	}
 
-	name := song.NoteName(event.Notes[0].Midi)
-	if len(event.Notes) == 1 {
-		return name
-	}
-
-	return fmt.Sprintf("%s +%d", name, len(event.Notes)-1)
+	return fmt.Sprintf("%s +%d notes", song.NoteName(notes[0].Midi), len(notes)-1)
 }
 
 // where says the position on the neck, which is the part somebody with a
-// guitar in their hands can act on without translating anything.
+// guitar in their hands can act on without translating anything. It runs from
+// the lowest note up, in the order the names beside it are written.
 func where(event song.Event) string {
-	parts := make([]string, 0, len(event.Notes))
-	for _, note := range event.Notes {
+	notes := sounding(event)
+	parts := make([]string, 0, len(notes))
+	for _, note := range notes {
 		if note.Fret == 0 {
 			parts = append(parts, fmt.Sprintf("string %d open", note.String))
 			continue

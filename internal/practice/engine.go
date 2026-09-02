@@ -2,6 +2,7 @@ package practice
 
 import (
 	"math"
+	"sort"
 	"time"
 
 	"github.com/VitorCdSouza/fretdeck/internal/song"
@@ -79,6 +80,11 @@ type Engine struct {
 	running  bool
 	offsets  []time.Duration
 	detected int
+
+	// repeat is the measures that were picked to be looped over. A song with
+	// none of them runs to the end, which is every song until somebody asks
+	repeat map[int]bool
+	passes int
 }
 
 func New(s *song.Song, mode Mode) *Engine {
@@ -93,6 +99,7 @@ func New(s *song.Song, mode Mode) *Engine {
 }
 
 func (e *Engine) Cursor() int         { return e.cursor }
+func (e *Engine) Passes() int         { return e.passes }
 func (e *Engine) Running() bool       { return e.running }
 func (e *Engine) Results() []Result   { return e.results }
 func (e *Engine) Detected() int       { return e.detected }
@@ -123,6 +130,13 @@ func (e *Engine) Reset() {
 	e.running = false
 	e.offsets = nil
 	e.detected = 0
+	e.passes = 0
+
+	// starting over inside a passage means the top of the passage, not the top
+	// of a song the loop is not going to play
+	if first := e.repeatStart(); first >= 0 {
+		e.cursor = first
+	}
 }
 
 // Seek jumps to an event, which is how somebody practises one measure over and
@@ -145,6 +159,104 @@ func (e *Engine) SeekMeasure(measure int) {
 			return
 		}
 	}
+}
+
+// ToggleRepeat picks a measure to be looped over, or drops it. A measure is
+// the unit because it is the one a passage is named by, and it is what the
+// screen and the keys already move through.
+func (e *Engine) ToggleRepeat(measure int) {
+	if e.repeat == nil {
+		e.repeat = map[int]bool{}
+	}
+	if e.repeat[measure] {
+		delete(e.repeat, measure)
+		return
+	}
+	e.repeat[measure] = true
+}
+
+// Repeats says whether a measure is one of the picked ones, which is what the
+// tab is marked from.
+func (e *Engine) Repeats(measure int) bool { return e.repeat[measure] }
+
+// Looping says there is a passage to come back to.
+func (e *Engine) Looping() bool { return len(e.repeat) > 0 }
+
+// Measures is the picked measures in the order they are played.
+func (e *Engine) Measures() []int {
+	picked := make([]int, 0, len(e.repeat))
+	for measure := range e.repeat {
+		picked = append(picked, measure)
+	}
+	sort.Ints(picked)
+	return picked
+}
+
+// ClearRepeat drops the lot and the song runs to its end again.
+func (e *Engine) ClearRepeat() {
+	e.repeat = nil
+	e.passes = 0
+}
+
+// Loop puts the cursor back at the top of the picked measures whenever it is
+// outside them, and says whether it had to. Heard and Tick call it as the
+// cursor moves on, and the screen calls it when a measure is picked, since a
+// loop nobody is inside of repeats nothing.
+func (e *Engine) Loop(now time.Time) bool {
+	if !e.Looping() {
+		return false
+	}
+	if !e.Done() && e.repeat[e.Events[e.cursor].Measure] {
+		return false
+	}
+
+	first := e.repeatStart()
+	if first < 0 {
+		return false
+	}
+
+	// the pass that just ended is not this one, so what it was judged on goes
+	// with it and the accuracy is about the take being played now
+	for index := range e.Events {
+		if e.repeat[e.Events[index].Measure] {
+			e.results[index] = Result{}
+		}
+	}
+
+	if e.cursor != first {
+		e.passes++
+	}
+	e.cursor = first
+	e.rewindClock(now)
+
+	return true
+}
+
+// repeatStart is the first event of the earliest picked measure.
+func (e *Engine) repeatStart() int {
+	for index, event := range e.Events {
+		if e.repeat[event.Measure] {
+			return index
+		}
+	}
+	return -1
+}
+
+// rewindClock puts the clock back where the passage begins, a count in short
+// of it, so a loop in tempo mode comes round with a bar to breathe in instead
+// of writing off every note it jumped over. Wait mode has no clock to move.
+func (e *Engine) rewindClock(now time.Time) {
+	if e.Mode != Tempo || !e.running {
+		return
+	}
+
+	speed := e.Speed
+	if speed <= 0 {
+		speed = 1
+	}
+
+	at := e.Events[e.cursor].Time * float64(time.Second)
+	e.origin = now.Add(-time.Duration(at / speed))
 }
 
 // Elapsed is where the clock is inside the song, negative during the count in.
@@ -222,6 +334,9 @@ func (e *Engine) Tick(now time.Time) {
 			e.results[e.cursor].Verdict = Missed
 		}
 		e.cursor++
+		if e.Loop(now) {
+			return
+		}
 	}
 }
 
@@ -242,6 +357,7 @@ func (e *Engine) Heard(midi int, now time.Time) Verdict {
 		}
 		e.results[e.cursor] = Result{Verdict: Hit, Played: midi}
 		e.cursor++
+		e.Loop(now)
 		return Hit
 	}
 
@@ -264,6 +380,7 @@ func (e *Engine) Heard(midi int, now time.Time) Verdict {
 		e.results[index] = Result{Verdict: Hit, Played: midi, Offset: offset}
 		e.offsets = append(e.offsets, offset)
 		e.cursor = index + 1
+		e.Loop(now)
 		return Hit
 	}
 

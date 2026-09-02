@@ -16,12 +16,6 @@ import (
 // with the tuning pegs rather than with the tuning.
 const inTune = 5.0
 
-// standard is what the tuner shows before any song is open.
-var standard = []song.String{
-	{Number: 1, Midi: 64}, {Number: 2, Midi: 59}, {Number: 3, Midi: 55},
-	{Number: 4, Midi: 50}, {Number: 5, Midi: 45}, {Number: 6, Midi: 40},
-}
-
 func (m *Model) viewTuner() string {
 	width := m.width - 8
 	if width > 61 {
@@ -126,7 +120,8 @@ func (m *Model) verdict(quiet bool) string {
 // played underlined. It answers the question a tuner is usually opened for,
 // which is which string is out and not which pitch is in the room.
 func (m *Model) strings(width int) string {
-	tuning := standard
+	// with no song open the strings are the ones of the instrument answered for
+	tuning := m.instrument().Tuning
 	if m.current != nil && len(m.current.Tuning) > 0 {
 		tuning = m.current.Tuning
 	}

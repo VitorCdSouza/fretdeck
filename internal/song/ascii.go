@@ -34,6 +34,14 @@ const techniques = "hpbrsvtx/\\~^*()<>=+ "
 // ParseASCII reads a text tab. The text may be the whole page somebody copied:
 // everything that is not a run of tab lines is skipped.
 func ParseASCII(text, title string) (*Song, error) {
+	return ParseTuned(text, title, "")
+}
+
+// ParseTuned reads a text tab whose tuning was written down apart from it,
+// which is how a tab site keeps it. The value is what such a site writes, the
+// thickest string first, as in "E A D G B E", and an empty one falls back to
+// reading the text.
+func ParseTuned(text, title, tuning string) (*Song, error) {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 
 	parsed := &Song{
@@ -55,7 +63,7 @@ func ParseASCII(text, title string) (*Song, error) {
 
 		if width == 0 {
 			width = len(block)
-			parsed.Tuning = tuningFor(width, text)
+			parsed.Tuning = tuningFrom(width, tuning, text)
 		}
 		if len(block) != width {
 			// a block with a different number of lines is a different
@@ -90,7 +98,7 @@ func readBlock(lines []string, index int) ([]string, int) {
 			}
 			continue
 		}
-		block = append(block, strip(lines[index]))
+		block = append(block, body(lines[index]))
 	}
 
 	return block, index
@@ -100,26 +108,41 @@ func readBlock(lines []string, index int) ([]string, int) {
 // line is made of: a tab line is dashes with frets in it, and a line of lyrics
 // is not, however many stray dashes it has.
 func tabLine(line string) bool {
-	body := strip(line)
-	if len(body) < 4 {
+	text := body(line)
+	if len(text) < 4 {
 		return false
 	}
 
-	dashes, other := 0, 0
-	for _, r := range body {
-		switch {
-		case r == '-' || r == '|':
+	dashes := 0
+	for _, r := range text {
+		if r == '-' || r == '|' {
 			dashes++
-		case r >= '0' && r <= '9', strings.ContainsRune(techniques, r):
-			other++
-		default:
-			return false
 		}
 	}
 
 	// half the line has to be the string itself, or a row of chord names over
 	// a lyric would qualify
-	return dashes*2 >= len(body) && dashes > 0
+	return dashes*2 >= len(text) && dashes > 0
+}
+
+// body is the string of the tab and nothing else: the label is taken off the
+// front, and so is whatever was written after the last dash, since a tab line
+// with a word beside it is still a tab line.
+func body(line string) string {
+	text := strip(line)
+
+	end := 0
+	for index, r := range text {
+		switch {
+		case r == '-' || r == '|':
+			end = index + 1
+		case r >= '0' && r <= '9', strings.ContainsRune(techniques, r):
+		default:
+			return text[:end]
+		}
+	}
+
+	return text[:end]
 }
 
 func strip(line string) string {
@@ -238,6 +261,16 @@ func layout(events [][]Note) ([]Note, []Measure) {
 	return notes, measures
 }
 
+// tuningFrom takes the first of three answers that fits: the tuning the source
+// carried alongside the tab, the one the text says in words, and the standard
+// tuning of an instrument with that many strings.
+func tuningFrom(count int, value, text string) []String {
+	if named := stringsFor(strings.Fields(value), count); named != nil {
+		return named
+	}
+	return tuningFor(count, text)
+}
+
 // tuningFor answers what the strings are tuned to. A tab that says so in words
 // is believed; otherwise it is the standard tuning of an instrument with that
 // many strings, which is right nearly every time and visible on the screen when
@@ -276,12 +309,16 @@ func namedTuning(count int, text string) []String {
 		return nil
 	}
 
-	names := strings.Fields(match[1])
-	if len(names) != count {
+	return stringsFor(strings.Fields(match[1]), count)
+}
+
+// stringsFor turns the letters of a written tuning into strings. They are
+// written from the thickest, which is the opposite of how the lines are drawn.
+func stringsFor(names []string, count int) []String {
+	if count == 0 || len(names) != count {
 		return nil
 	}
 
-	// written low to high, which is the opposite of how the lines are drawn
 	tuning := make([]String, count)
 	for index, name := range names {
 		midi, ok := openMidi(name, count-index)
@@ -323,17 +360,24 @@ func openMidi(name string, number int) (int, bool) {
 // comes from the title, since a text tab has no file of its own to be named
 // after the way a guitar pro import does.
 func Write(dir string, parsed *Song) (string, error) {
+	return WriteAs(dir, parsed, parsed.Title)
+}
+
+// WriteAs saves a song under a name of the caller's choosing. A tab pulled off
+// a tab site needs one: a song has a dozen transcriptions there, and naming
+// them all after the title would leave one file.
+func WriteAs(dir string, parsed *Song, name string) (string, error) {
 	data, err := json.MarshalIndent(parsed, "", " ")
 	if err != nil {
 		return "", err
 	}
 
-	name := slug(parsed.Title)
-	if name == "" {
-		name = "untitled"
+	file := slug(name)
+	if file == "" {
+		file = "untitled"
 	}
 
-	path := filepath.Join(dir, name+".json")
+	path := filepath.Join(dir, file+".json")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", err
 	}

@@ -76,3 +76,48 @@ def test_tracker_hears_the_same_note_twice():
             heard += 1
 
     assert heard == 2
+
+
+def room(level=0.02, seconds=1.0, rate=44100, hum=60.0):
+    """a room with a fan and mains hum in it: steady, one pitch, and nobody
+    playing. it sits over the silence gate, which is why it used to be a note."""
+    t = np.arange(int(seconds * rate)) / rate
+    noise = 0.3 * level * np.random.default_rng(2).standard_normal(len(t))
+    return (level * np.sin(2 * np.pi * hum * t) + noise).astype("float32")
+
+
+def run(tracker, audio, rate=44100):
+    heard = []
+    for start in range(0, len(audio) - pitch.FRAME, pitch.HOP):
+        note = tracker.push(audio[start : start + pitch.FRAME], start / rate)
+        if note is not None:
+            heard.append(note["name"])
+    return heard
+
+
+def test_a_steady_room_is_never_a_note():
+    assert run(pitch.Tracker(44100), room(seconds=2.0)) == []
+
+
+def test_a_string_struck_in_that_room_is_still_heard():
+    audio = np.concatenate([room(seconds=0.5), pluck(110.0, 0.5) + room(seconds=0.5)])
+
+    assert run(pitch.Tracker(44100), audio) == ["A2"]
+
+
+def test_a_note_needs_the_level_to_rise():
+    tracker = pitch.Tracker(44100)
+
+    # the room is the floor after a second of it, and the same tone held for
+    # another second begins nothing
+    run(tracker, room(seconds=1.0))
+    assert tracker.attacked() is False
+
+    quiet = pluck(110.0, 0.3) * 0.02
+    run(tracker, quiet)
+    assert tracker.attacked() is False
+
+
+def test_a_recording_that_starts_on_the_note_still_hears_it():
+    # an offline take trimmed to the first attack has no room in front of it
+    assert run(pitch.Tracker(44100), pluck(146.83, 0.4)) == ["D3"]
