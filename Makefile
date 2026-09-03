@@ -1,5 +1,7 @@
 BINARY := fretdeck
 PYTHON ?= python3
+VENV := .venv
+VENV_PYTHON := $(VENV)/bin/python
 
 .PHONY: help build run test lint clean install-python
 
@@ -14,15 +16,17 @@ run: ## open the interface from the source, ARGS='-song x.json' passes flags on
 
 test: ## go tests plus the python ones
 	go test ./...
-	$(PYTHON) -m pytest internal/scripts -q
+	$(VENV_PYTHON) -m pytest internal/scripts -q
 
 lint: ## vet and gofmt
 	go vet ./...
 	@test -z "$$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
 
 install-python: ## install what the audio side needs, tests included
-	$(PYTHON) -m pip install -r requirements.txt pytest
+	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
+	$(VENV_PYTHON) -m pip install -r requirements.txt pytest
 
 clean:
 	rm -f $(BINARY)
+	rm -rf $(VENV)
 	find internal/scripts -name '__pycache__' -type d -exec rm -rf {} +

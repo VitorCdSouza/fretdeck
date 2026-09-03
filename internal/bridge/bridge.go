@@ -90,6 +90,9 @@ func python() string {
 	if chosen := os.Getenv("FRETDECK_PYTHON"); chosen != "" {
 		return chosen
 	}
+	if _, err := os.Stat(".venv/bin/python"); err == nil {
+		return ".venv/bin/python"
+	}
 	return "python3"
 }
 
