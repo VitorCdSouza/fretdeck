@@ -104,6 +104,10 @@ func (m *Model) practiceHead() string {
 	}
 
 	parts := []string{mode}
+	if beat := m.beatHead(); beat != "" {
+		parts = append(parts, beat)
+	}
+	parts = append(parts, styleFaint.Render(m.engine.Level().String()))
 	if repeat := m.repeatHead(); repeat != "" {
 		parts = append(parts, repeat)
 	}
@@ -113,6 +117,20 @@ func (m *Model) practiceHead() string {
 	left := truncate("  "+title, m.width-lipgloss.Width(right)-2)
 
 	return pad(left, right, m.width)
+}
+
+// beatHead is the beat being counted, and it is only on the screen where there
+// is one: a tab with no rhythm and no click is played to nothing at all.
+func (m *Model) beatHead() string {
+	if m.engine.Mode != practice.Tempo && !m.engine.ClickOn() {
+		return ""
+	}
+
+	text := fmt.Sprintf("%.0f bpm", m.engine.Bpm())
+	if m.engine.ClickOn() {
+		return styleAccent.Render(text)
+	}
+	return styleFaint.Render(text)
 }
 
 // repeatHead is what the passage being looped over is called, and the number
@@ -242,6 +260,13 @@ func (m *Model) tabRow(row song.Row) string {
 // the only part of the screen somebody looks at while their hands are busy, so
 // it says the note by name and by where it is on the neck.
 func (m *Model) callout() string {
+	// the app has one text field and it is drawn where it was opened. asking
+	// for a beat here and typing it into the music screen would be typing into
+	// a line nobody on this screen can see
+	if m.input.Focused() {
+		return styleAccent.Render("  ▸") + m.input.View()
+	}
+
 	if m.engine.Done() {
 		score := m.engine.Score()
 		return "  " + styleOk.Render("done") + styleFaint.Render("   ") +
@@ -285,16 +310,18 @@ func (m *Model) progressLine() string {
 	return "  " + metronome + bar(m.engine.Progress(), width, styleAccent)
 }
 
-// metronome counts the bar on the screen. It cannot count it out loud: the
-// microphone is open, and anything coming out of the speakers would be heard
-// as a note.
+// metronome counts the bar on the screen, and out loud as well when the click
+// was asked for. The count is always drawn: the input is open while it sounds,
+// so the click is off until somebody turns it on and the dots are what is left
+// for the eye when it is.
 func (m *Model) metronome() string {
-	if m.engine.Mode != practice.Tempo || !m.engine.Running() {
+	running := m.engine.Mode == practice.Tempo && m.engine.Running()
+	if !running && !m.engine.ClickOn() {
 		return ""
 	}
 
 	now := time.Now()
-	pulse, count := m.engine.Pulse(now)
+	pulse, count := m.engine.ClickPulse(now)
 	counting := m.engine.CountIn(now) > 0
 
 	dots := make([]string, count)
@@ -346,11 +373,18 @@ func where(event song.Event) string {
 	notes := sounding(event)
 	parts := make([]string, 0, len(notes))
 	for _, note := range notes {
+		// the technique is the half of it the fret number cannot say, and it is
+		// only there when the level asks for it
+		how := ""
+		if note.Technique != "" {
+			how = " " + string(note.Technique)
+		}
+
 		if note.Fret == 0 {
-			parts = append(parts, fmt.Sprintf("string %d open", note.String))
+			parts = append(parts, fmt.Sprintf("string %d open%s", note.String, how))
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("string %d fret %d", note.String, note.Fret))
+		parts = append(parts, fmt.Sprintf("string %d fret %d%s", note.String, note.Fret, how))
 	}
 
 	if len(parts) > 3 {

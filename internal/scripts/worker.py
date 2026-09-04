@@ -45,6 +45,16 @@ STEADY = 30.0
 # portaudio lists the whole machine again through it and opens none of it
 JACK = "JACK Audio Connection Kit"
 
+# how long one click lasts and how loud it is. twenty milliseconds is heard as
+# a click and is shorter than one frame of the detector, so it can only ever
+# spoil the one frame it lands in
+CLICK_SECONDS = 0.02
+CLICK_LEVEL = 0.25
+
+# the edges of the burst are faded over this, since a tone that starts on a
+# step is a click plus a thump and a thump has no pitch to stay deaf to
+CLICK_FADE = 0.002
+
 
 def emit(event, message="", data=None):
     line = {"event": event, "message": message}
@@ -313,14 +323,105 @@ def shut(stream):
         stream.close(ignore_errors=True)
 
 
+def click_tone(rate, midi):
+    """one click: a short burst of a tone that is not a note.
+
+    the pitch is deliberately half a semitone off the grid a fretboard is
+    written on, which is what lets the tracker stay deaf to it without ever
+    being deaf to a string.
+    """
+    count = max(1, int(rate * CLICK_SECONDS))
+    steps = np.arange(count)
+
+    wave = np.sin(2 * np.pi * pitch.freq_from_midi(midi) * steps / float(rate))
+    edge = max(1.0, CLICK_FADE * rate)
+    fade = np.minimum(1.0, np.minimum(steps, steps[::-1]) / edge)
+
+    return (wave * fade * CLICK_LEVEL).astype("float32")
+
+
+def one_beat(rate, bpm, index):
+    """the audio of one beat: the click and the silence after it.
+
+    a beat at a time and not a bar, so a click that is turned off is quiet
+    within a beat rather than at the end of the bar it was in.
+    """
+    length = max(1, int(round(rate * 60.0 / bpm)))
+    out = np.zeros(length, dtype="float32")
+
+    tone = click_tone(rate, pitch.ACCENT_MIDI if index == 0 else pitch.CLICK_MIDI)
+    out[: len(tone)] = tone[:length]
+
+    return out
+
+
+class Metronome:
+    """the click, on an output of its own.
+
+    it keeps its own time. a beat handed over the pipe one at a time would
+    carry every hiccup of the pipe with it, so what the go side sends is the
+    beat and the bar and the writing here is what paces it: a blocking stream
+    is consumed at exactly the rate the card runs at.
+    """
+
+    def __init__(self, rate=44100):
+        self.rate = rate
+        self.bpm = 0.0
+        self.beats = 4
+        self.changed = threading.Event()
+        self.stop_flag = threading.Event()
+
+    def set(self, bpm, beats):
+        """asks for a beat, and a bpm of zero is what turns it off."""
+        self.bpm = max(0.0, float(bpm or 0.0))
+        self.beats = max(1, int(beats or 4))
+        self.changed.set()
+
+    def sounding(self):
+        return self.bpm > 0.0
+
+    def run(self):
+        while not self.stop_flag.is_set():
+            self.changed.clear()
+            bpm, beats = self.bpm, self.beats
+
+            if bpm <= 0.0:
+                self.changed.wait(0.2)
+                continue
+
+            try:
+                stream = sd.OutputStream(
+                    samplerate=self.rate, channels=1, dtype="float32"
+                )
+                stream.start()
+            except Exception as error:
+                # nothing to play it on is the click not working and not the
+                # listening, so it says so and stops asking
+                emit("click_error", str(error))
+                self.bpm = 0.0
+                continue
+
+            try:
+                index = 0
+                while not self.stop_flag.is_set() and not self.changed.is_set():
+                    stream.write(one_beat(self.rate, bpm, index))
+                    index = (index + 1) % beats
+            except Exception as error:
+                emit("click_error", str(error))
+                self.bpm = 0.0
+            finally:
+                shut(stream)
+
+
 class Listener:
     """one open input stream, feeding the tracker frame by frame."""
 
-    def __init__(self, device, rate, source="", card=""):
+    def __init__(self, device, rate, source="", card="", metronome=None):
         self.device = device
         self.rate = rate
         self.source = source
         self.card = card
+        self.metronome = metronome
         self.blocks = queue.Queue()
         self.stream = None
         self.stop_flag = threading.Event()
@@ -494,6 +595,12 @@ class Listener:
                 buffer = np.concatenate((buffer[len(block):], block))
                 elapsed += len(block) / self.rate
 
+                # the click goes out of a speaker and comes back in on an
+                # open microphone, and it is a note nobody played
+                tracker.deaf = ()
+                if self.metronome is not None and self.metronome.sounding():
+                    tracker.deaf = pitch.CLICK_PITCHES
+
                 note = tracker.push(buffer, elapsed)
                 if note is not None:
                     emit("note", data=note)
@@ -538,6 +645,11 @@ def stop(listener):
 def main():
     listener = None
 
+    # one metronome for the session, the same as the input: it holds an output
+    # open while it counts and opening one per beat would be heard as a limp
+    metronome = Metronome()
+    threading.Thread(target=metronome.run, daemon=True).start()
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -565,12 +677,19 @@ def main():
             device = command.get("device")
             rate = int(command.get("rate") or 44100)
             listener = Listener(
-                device, rate, command.get("source") or "", command.get("card") or ""
+                device,
+                rate,
+                command.get("source") or "",
+                command.get("card") or "",
+                metronome,
             )
             threading.Thread(target=listener.run, daemon=True).start()
 
         elif action == "stop":
             listener = stop(listener)
+
+        elif action == "click":
+            metronome.set(command.get("bpm"), command.get("beats"))
 
         elif action == "quit":
             break
@@ -578,6 +697,8 @@ def main():
         else:
             emit("error", "unknown action: %s" % action)
 
+    metronome.stop_flag.set()
+    metronome.set(0, 0)
     stop(listener)
 
     # portaudio asserts and dumps core on the way out when an open never

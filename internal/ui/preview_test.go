@@ -27,7 +27,7 @@ func TestTheFirstLinesAreTheTabAndNotTheBlanksBeforeIt(t *testing.T) {
 func TestThePageIsReadOnceTheCursorHasComeToRest(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
-	m.source = sourceUltimate
+	m.focus = paneSearch
 	m.results = []finding{
 		{Title: "one", Kind: ultimate.KindTab, URL: "a"},
 		{Title: "two", Kind: ultimate.KindTab, URL: "b"},
@@ -67,31 +67,31 @@ func TestThePageIsReadOnceTheCursorHasComeToRest(t *testing.T) {
 func TestThePaneSaysWhatItHas(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
-	m.source = sourceUltimate
+	m.focus = paneSearch
 	m.results = []finding{{Title: "one", Kind: ultimate.KindTab, URL: "a"}}
 
-	if lines := m.viewPreview(12); len(lines) == 0 {
+	if lines := m.viewPreview(m.width, 12); len(lines) == 0 {
 		t.Fatal("a row that is not here yet is what the pane is for")
 	}
 
 	m.pages = map[string]*page{"a": {}}
-	if !strings.Contains(strings.Join(m.viewPreview(12), " "), "reading the page") {
+	if !strings.Contains(strings.Join(m.viewPreview(m.width, 12), " "), "reading the page") {
 		t.Fatal("a page on its way has to say so")
 	}
 
 	m.pages["a"] = &page{tab: &ultimate.Tab{Text: "e|--0--|\n"}}
-	if !strings.Contains(stripAnsi(strings.Join(m.viewPreview(12), " ")), "e|--0--|") {
+	if !strings.Contains(stripAnsi(strings.Join(m.viewPreview(m.width, 12), " ")), "e|--0--|") {
 		t.Fatal("the tab did not make it onto the pane")
 	}
 
 	m.pages["a"] = &page{fail: "that page carries no tab"}
-	if !strings.Contains(stripAnsi(strings.Join(m.viewPreview(12), " ")), "no tab") {
+	if !strings.Contains(stripAnsi(strings.Join(m.viewPreview(m.width, 12), " ")), "no tab") {
 		t.Fatal("a page that could not be read has to say why")
 	}
 
 	// a song that is already here is not previewed, it is here to be played
 	m.results[0].Path = "/home/somebody/fretdeck/songs/one.json"
-	if lines := m.viewPreview(12); len(lines) != 0 {
+	if lines := m.viewPreview(m.width, 12); len(lines) != 0 {
 		t.Fatal("a song in the library does not need looking at first")
 	}
 }
@@ -101,8 +101,8 @@ func TestThePaneSaysWhatItHas(t *testing.T) {
 func TestARecentRowIsReadBackInWithoutAKind(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
-	m.source = sourceRecent
-	m.results = []finding{{From: sourceRecent, Title: "otherside", URL: "a"}}
+	m.focus = paneRecent
+	m.kept = []finding{{From: sourceRecent, Title: "otherside", URL: "a"}}
 
 	if cmd := m.enterSearch(); cmd == nil {
 		t.Fatal("the page was not read")

@@ -39,6 +39,11 @@ type Note struct {
 	String  int     `json:"string"`
 	Fret    int     `json:"fret"`
 	Midi    int     `json:"midi"`
+
+	// Technique is how the note is got at, when the file said so. A note
+	// carries the hardest of the ones written on it, since the difficulty is a
+	// ladder and a note stands on one rung of it
+	Technique Technique `json:"tech,omitempty"`
 }
 
 type Song struct {
@@ -125,9 +130,21 @@ func (s *Song) Label(number int) string {
 // Events groups the notes by attack. Notes closer than a thirty second note at
 // 200 bpm are the same strum, and no tab writes two columns for that.
 func (s *Song) Events() []Event {
+	return s.EventsAt(Full)
+}
+
+// EventsAt is the same grouping with the techniques the level does not reach
+// taken off. The note stays where it is and keeps its pitch: what a level
+// below a bend drops is the asking for the bend, so it is played as the fret
+// it is written on and the tab stops drawing the letter.
+func (s *Song) EventsAt(level Level) []Event {
 	var events []Event
 
 	for _, note := range s.Notes {
+		if note.Technique.Level() > level {
+			note.Technique = ""
+		}
+
 		if n := len(events); n > 0 && math.Abs(note.Time-events[n-1].Time) < 0.02 {
 			events[n-1].Notes = append(events[n-1].Notes, note)
 			continue

@@ -10,7 +10,7 @@ import (
 	"github.com/VitorCdSouza/fretdeck/internal/ultimate"
 )
 
-// The bottom half of the search screen. A song there has a dozen
+// The bottom of the search column. A song there has a dozen
 // transcriptions and the number beside a row only says how many people liked
 // one; the first lines of the tab itself are what answers whether it is the
 // one worth taking.
@@ -102,18 +102,18 @@ func (m *Model) read(msg pageMsg) {
 }
 
 // viewPreview is the pane itself, and nothing at all when there is no row to
-// preview, so a list of songs that are all here gets the whole screen.
-func (m *Model) viewPreview(room int) []string {
+// preview, so a list of songs that are all here gets the whole column.
+func (m *Model) viewPreview(width, room int) []string {
 	item, ok := m.previewOf()
 	if !ok || room < 5 {
 		return nil
 	}
 
-	head := m.sectionHead("THE TAB ITSELF", truncate(item.Title, m.width/3))
-	lines := []string{rule(m.width), "", head, ""}
+	head := columnHead("THE TAB ITSELF", truncate(item.Title, width/3), width)
+	lines := []string{rule(width), "", head, ""}
 
 	for _, line := range m.previewBody(item, room-len(lines)) {
-		lines = append(lines, "  "+styleFaint.Render(truncate(line, m.width-4)))
+		lines = append(lines, "  "+styleFaint.Render(truncate(line, width-4)))
 	}
 
 	// the same height either way, or the list above would jump when it lands

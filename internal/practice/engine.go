@@ -71,7 +71,9 @@ type Engine struct {
 	Events []song.Event
 	Mode   Mode
 
-	// Speed multiplies the tempo, so a passage can be run slower than written
+	// Speed multiplies the tempo, so a passage can be run slower than written.
+	// SetSpeed is what keeps it inside its ends, and asking for a beat in bpm
+	// goes through the same field
 	Speed float64
 
 	results  []Result
@@ -85,17 +87,73 @@ type Engine struct {
 	// none of them runs to the end, which is every song until somebody asks
 	repeat map[int]bool
 	passes int
+
+	// level is how much of the transcription the song is asking for. It takes
+	// nothing off the notes and only off what is written on them, so the
+	// cursor and every verdict already given still stand where they were
+	level song.Level
+
+	// the metronome, which is the one clock here that is not the song's
+	click     bool
+	clickBpm  float64
+	clickFrom time.Time
 }
 
+// defaultBpm is what the click counts for a song that carries no tempo of its
+// own. It is the beat every metronome on earth opens on.
+const defaultBpm = 120.0
+
+// The ends of the speed. Under a quarter of what was written the notes stop
+// being a phrase, and over twice it the song is not the one on the page.
+const (
+	MinSpeed = 0.25
+	MaxSpeed = 2.0
+)
+
 func New(s *song.Song, mode Mode) *Engine {
-	events := s.Events()
+	events := s.EventsAt(song.Full)
 	return &Engine{
-		Song:    s,
-		Events:  events,
-		Mode:    mode,
-		Speed:   1,
-		results: make([]Result, len(events)),
+		Song:     s,
+		Events:   events,
+		Mode:     mode,
+		Speed:    1,
+		level:    song.Full,
+		clickBpm: defaultBpm,
+		results:  make([]Result, len(events)),
 	}
+}
+
+// Level is how much of the transcription is being asked for.
+func (e *Engine) Level() song.Level { return e.level }
+
+// SetLevel changes it and lays the events out again. Nothing else moves: a
+// level takes no note away and only what is written on one, so the cursor is
+// still on the note it was on and every verdict already given still stands.
+func (e *Engine) SetLevel(level song.Level) {
+	e.level = level
+	e.Events = e.Song.EventsAt(level)
+}
+
+// SetSpeed keeps the multiplier inside its ends, and it is the one way in:
+// asking for a beat in bpm ends up here too, so the two cannot disagree.
+func (e *Engine) SetSpeed(speed float64) float64 {
+	if speed < MinSpeed {
+		speed = MinSpeed
+	}
+	if speed > MaxSpeed {
+		speed = MaxSpeed
+	}
+	e.Speed = speed
+	return speed
+}
+
+// speed is the multiplier as the clock reads it, since a zero left on the
+// field would stop the song rather than run it as written.
+func (e *Engine) speed() float64 {
+	if e.Speed <= 0 {
+		return 1
+	}
+	return e.Speed
 }
 
 func (e *Engine) Cursor() int         { return e.cursor }
@@ -250,13 +308,8 @@ func (e *Engine) rewindClock(now time.Time) {
 		return
 	}
 
-	speed := e.Speed
-	if speed <= 0 {
-		speed = 1
-	}
-
 	at := e.Events[e.cursor].Time * float64(time.Second)
-	e.origin = now.Add(-time.Duration(at / speed))
+	e.origin = now.Add(-time.Duration(at / e.speed()))
 }
 
 // Elapsed is where the clock is inside the song, negative during the count in.
@@ -264,11 +317,7 @@ func (e *Engine) Elapsed(now time.Time) time.Duration {
 	if !e.running {
 		return 0
 	}
-	speed := e.Speed
-	if speed <= 0 {
-		speed = 1
-	}
-	return time.Duration(float64(now.Sub(e.origin)-countIn) * speed)
+	return time.Duration(float64(now.Sub(e.origin)-countIn) * e.speed())
 }
 
 // CountIn is what is left of the count in, and zero once the song is running.

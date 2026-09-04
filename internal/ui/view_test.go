@@ -147,6 +147,7 @@ func mustFit(t *testing.T, m *Model, what string) {
 func TestMovementIsVimOnEveryList(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
+	m.focus = paneSearch
 	m.results = []finding{{Title: "one"}, {Title: "two"}, {Title: "three"}}
 
 	m.move(1)
@@ -179,6 +180,7 @@ func TestMovingOnAnEmptyListIsNotACrash(t *testing.T) {
 	m.songs = nil
 	m.results = nil
 	m.screen = screenMusic
+	m.focus = paneSearch
 
 	m.move(1)
 	m.jump(1)
@@ -417,16 +419,16 @@ func TestTheAppOpensOnWhatWasPlayed(t *testing.T) {
 	}
 
 	m := New()
-	if m.source != sourceRecent {
-		t.Fatalf("the screen opens on what was played, got source %d", m.source)
+	if m.focus != paneRecent {
+		t.Fatal("the keys open on what was played, not on an empty search")
 	}
-	if len(m.results) != 1 || m.results[0].Title != "Test Riff" {
-		t.Fatalf("the recent list did not come back, got %d rows", len(m.results))
+	if len(m.kept) != 1 || m.kept[0].Title != "Test Riff" {
+		t.Fatalf("the recent list did not come back, got %d rows", len(m.kept))
 	}
 
 	// the file is not on disk, and the entry stays anyway: the page it came
 	// from is still the answer to finding it again
-	if m.results[0].Have() {
+	if m.kept[0].Have() {
 		t.Fatal("a song that is not on disk is not in the library")
 	}
 }
@@ -448,7 +450,7 @@ func TestRemovingADownloadedSongAsksFirst(t *testing.T) {
 	m.screen = screenMusic
 	m.showRecent()
 
-	if !m.results[0].Have() {
+	if !m.kept[0].Have() {
 		t.Fatal("the song is on disk, so the row has to say so")
 	}
 
@@ -507,15 +509,15 @@ func TestForgettingASongThatIsNotHereDoesNotAsk(t *testing.T) {
 func TestOneLookupAnswersEveryVersionOfASong(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
-	m.source = sourceUltimate
+	m.focus = paneSearch
 	m.showTabs([]ultimate.Result{
 		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 1, URL: "one"},
 		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 2, URL: "two"},
 		{Artist: "Nobody", Title: "Another One", Kind: ultimate.KindTab, Version: 1, URL: "three"},
 	})
 
-	if stillLooking(m.results) != 3 {
-		t.Fatalf("every row waits on an answer, %d are", stillLooking(m.results))
+	if stillLooking(m.results) != 2 {
+		t.Fatalf("both songs wait on an answer, %d do", stillLooking(m.results))
 	}
 
 	keys := map[string]bool{}
@@ -523,10 +525,15 @@ func TestOneLookupAnswersEveryVersionOfASong(t *testing.T) {
 		keys[item.Key] = true
 	}
 	if len(keys) != 2 {
-		t.Fatalf("three rows of two songs is two lookups, got %d", len(keys))
+		t.Fatalf("three transcriptions of two songs is two lookups, got %d", len(keys))
 	}
 
 	m.answered(lookupMsg{key: m.results[0].Key, level: 4, found: true})
+
+	// the versions are opened after the answer landed, and they take it from
+	// the row they came out of rather than asking again
+	m.found = 0
+	m.expand(0)
 
 	for _, item := range m.results {
 		if item.Title != "Test Riff" {
@@ -542,6 +549,119 @@ func TestOneLookupAnswersEveryVersionOfASong(t *testing.T) {
 	}
 }
 
+// TestSearchGroupsTheVersionsOfASong is the list a search draws: one row per
+// song however many transcriptions of it came back, and the best liked of them
+// is the row.
+func TestSearchGroupsTheVersionsOfASong(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.focus = paneSearch
+	m.showTabs([]ultimate.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 1, Rating: 5, Votes: 2, URL: "one"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 2, Rating: 4.7, Votes: 300, URL: "two"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindBass, Version: 1, Rating: 4.5, Votes: 40, URL: "bass"},
+		{Artist: "Nobody", Title: "Another One", Kind: ultimate.KindTab, Version: 1, Rating: 4, Votes: 10, URL: "four"},
+	})
+
+	if len(m.results) != 3 {
+		t.Fatalf("two songs and a bass part of one is three rows, got %d", len(m.results))
+	}
+
+	head := m.results[0]
+	if head.Count != 2 {
+		t.Fatalf("the guitar tab has two versions, the row says %d", head.Count)
+	}
+
+	// a rating stands on the votes under it: five stars from two people is not
+	// the best transcription of anything
+	if head.Version != 2 {
+		t.Fatalf("the row is the best liked version, got version %d", head.Version)
+	}
+
+	// the bass part is a row of its own and not a version of the guitar one.
+	// it sits at the bottom, since a tab for the other instrument is somebody
+	// else's part
+	bass := m.results[len(m.results)-1]
+	if bass.Kind != ultimate.KindBass || bass.Count != 1 {
+		t.Fatalf("the bass part is its own row, got kind %q count %d",
+			bass.Kind, bass.Count)
+	}
+}
+
+// TestEnterOpensAndClosesTheVersions is the key on a row that has more than
+// one transcription under it: which version to read is a question, and enter
+// is what answers one.
+func TestEnterOpensAndClosesTheVersions(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.focus = paneSearch
+	m.showTabs([]ultimate.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 1, Rating: 4, Votes: 100, URL: "one"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 2, Rating: 4.8, Votes: 200, URL: "two"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 3, Rating: 4.6, Votes: 150, URL: "three"},
+		{Artist: "Nobody", Title: "Another One", Kind: ultimate.KindTab, Version: 1, URL: "four"},
+	})
+
+	m.found = 0
+	m.keySearch("enter")
+
+	if len(m.results) != 5 {
+		t.Fatalf("three versions under two songs is five rows, got %d", len(m.results))
+	}
+	if !m.results[0].Open {
+		t.Fatal("the row the versions came out of does not say it is open")
+	}
+
+	// the versions are in the order people rate them, best first
+	order := []int{m.results[1].Version, m.results[2].Version, m.results[3].Version}
+	if order[0] != 2 || order[1] != 3 || order[2] != 1 {
+		t.Fatalf("the versions are not in the order they are rated, got %v", order)
+	}
+
+	// the other song keeps its place under them
+	if m.results[4].Title != "Another One" {
+		t.Fatalf("the song under the group moved, row four is %q", m.results[4].Title)
+	}
+
+	// h closes the group from any of its versions, and the cursor comes back
+	// to the row it was opened from
+	m.found = 2
+	m.keySearch("h")
+
+	if len(m.results) != 2 {
+		t.Fatalf("the group closed leaves two rows, got %d", len(m.results))
+	}
+	if m.found != 0 {
+		t.Fatalf("the cursor is on the row that closed, it is on %d", m.found)
+	}
+	if m.results[0].Open {
+		t.Fatal("the closed row still says it is open")
+	}
+	if m.focus != paneSearch {
+		t.Fatal("h closed the group and left the column as well")
+	}
+}
+
+// TestEnterOnASingleVersionReadsIt is the row of a song nobody wrote twice:
+// there is nothing to open and the key means what it always did.
+func TestEnterOnASingleVersionReadsIt(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.focus = paneSearch
+	m.showTabs([]ultimate.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 1, URL: "one"},
+	})
+
+	if m.results[0].heads() {
+		t.Fatal("a song with one transcription of it opens into nothing")
+	}
+
+	m.found = 0
+	if cmd := m.keySearch("enter"); cmd == nil {
+		t.Fatal("enter on the only version of a song reads it in")
+	}
+}
+
 // TestEnterPractisesWhatIsAlreadyHere is the one meaning of the key on every
 // list: play the song when it is here, and go and get it when it is not.
 func TestEnterPractisesWhatIsAlreadyHere(t *testing.T) {
@@ -550,6 +670,7 @@ func TestEnterPractisesWhatIsAlreadyHere(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
 	m.songs[0].Path = "/home/somebody/fretdeck/songs/test-riff.json"
+	m.focus = paneSearch
 	m.results = []finding{{Artist: "Nobody", Title: "Test Riff", Path: m.songs[0].Path}}
 	m.current, m.engine, m.tab = nil, nil, nil
 
@@ -572,6 +693,7 @@ func TestLDoesNotOpenASongOnTheSearchScreen(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
 	m.songs[0].Path = "/home/somebody/fretdeck/songs/test-riff.json"
+	m.focus = paneSearch
 	m.results = []finding{{Artist: "Nobody", Title: "Test Riff", Path: m.songs[0].Path}}
 	m.current, m.engine, m.tab = nil, nil, nil
 
@@ -705,22 +827,52 @@ func TestAKeyIsWrittenInBrackets(t *testing.T) {
 			t.Fatalf("%q is written %q and not %q", keys, got, want)
 		}
 	}
+}
 
+// TestTheBarIsTheHelpKeyAndTheInput is the whole of the footer now: the map is
+// behind one key and the line it used to fill is the list's.
+func TestTheBarIsTheHelpKeyAndTheInput(t *testing.T) {
 	m := model(t)
-	m.screen = screenMusic
+	m.screen = screenPractice
+	m.status = "the click counts 120 bpm"
 
-	line := stripAnsi(m.bar(80))
-	if !strings.HasPrefix(line, "[i] search song   [j/k] up/down") {
-		t.Fatalf("the bar does not read as keys and what they do: %q", line)
+	lines := strings.Split(stripAnsi(m.footer()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("the footer is a rule and a line, it drew %d: %q", len(lines), lines)
 	}
 
-	// the rest of the keys are behind the question mark, so the question mark
-	// is the one chip that is never dropped for want of room
-	if !strings.HasSuffix(line, "[?] keys") {
-		t.Fatalf("the help key is not at the end of the bar: %q", line)
+	line := lines[1]
+	if !strings.HasPrefix(line, "[?] keys") {
+		t.Fatalf("the footer does not open on the help key: %q", line)
 	}
-	if narrow := stripAnsi(m.bar(12)); narrow != "[?] keys" {
-		t.Fatalf("a bar with no room for a key kept %q", narrow)
+
+	// no key of the screen is written out there any more, and neither is what
+	// the app had to say
+	if strings.Contains(line, "[space]") || strings.Contains(line, "120 bpm") {
+		t.Fatalf("the footer still carries the keys or the status: %q", line)
+	}
+
+	// the input keeps its corner, since it is read while nothing else is
+	if !strings.Contains(line, "in ") {
+		t.Fatalf("the input is not in the corner: %q", line)
+	}
+}
+
+// TestTheHelpSaysEverythingTheScreenDoes is what the bar used to answer for:
+// the map behind the question mark is the only place a key is written now, so
+// every one of them has to be on it.
+func TestTheHelpSaysEverythingTheScreenDoes(t *testing.T) {
+	m := model(t)
+	m.screen = screenPractice
+
+	drawn := stripAnsi(m.viewHelp())
+	for _, item := range m.bindings() {
+		if !strings.Contains(drawn, keyLabel(item.keys)) {
+			t.Fatalf("%s is on no line of the map: %q", keyLabel(item.keys), drawn)
+		}
+		if !strings.Contains(drawn, item.what) {
+			t.Fatalf("%s is on the map with nothing beside it", keyLabel(item.keys))
+		}
 	}
 }
 
@@ -775,12 +927,14 @@ func TestClickingAButtonOpensThatScreen(t *testing.T) {
 func TestClickingARowSelectsIt(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
+	m.focus = paneSearch
 	m.results = []finding{{Title: "one"}, {Title: "two"}, {Title: "three"}}
 
-	// the rows are where the last drawing put them, under the search field and
-	// the head of the list
+	// the rows are where the last drawing put them: in the right column, under
+	// the search field and the head of the list
 	m.View()
-	m.mouse(click(4, headerLines+len(m.searchBox())+2+2))
+	column := m.sidebarWidth() + 4
+	m.mouse(click(column, headerLines+len(m.searchBox(0))+2+2))
 
 	if m.found != 2 {
 		t.Fatalf("the third row was clicked, the cursor is on %d", m.found)
@@ -790,9 +944,19 @@ func TestClickingARowSelectsIt(t *testing.T) {
 	}
 
 	// under the list is not a row
-	m.mouse(click(4, m.height-2))
+	m.mouse(click(column, m.height-2))
 	if m.found != 2 {
 		t.Fatalf("a click past the list moved the cursor to %d", m.found)
+	}
+
+	// the column answers as much as the line does: the same line on the left
+	// is the list of what was played
+	m.kept = []finding{{Title: "kept one"}, {Title: "kept two"}}
+	m.View()
+	m.mouse(click(2, headerLines+3))
+
+	if m.focus != paneRecent {
+		t.Fatal("a click on the left column left the keys on the search")
 	}
 }
 
@@ -1014,7 +1178,7 @@ func TestTheRowUnderTheCursorIsPaintedAcross(t *testing.T) {
 		From: sourceUltimate, Kind: ultimate.KindTab, Version: 4,
 		Rating: 4.8, Votes: 1089, Level: 2, State: lookupDone}
 
-	row := m.findingRow(item, true)
+	row := m.findingRow(item, true, m.width)
 	if lipgloss.Width(row) != m.width {
 		t.Fatalf("the row is %d columns wide, not %d", lipgloss.Width(row), m.width)
 	}
@@ -1028,7 +1192,7 @@ func TestTheRowUnderTheCursorIsPaintedAcross(t *testing.T) {
 		t.Fatalf("%d of the %d pieces of the row carry the band", painted, ends)
 	}
 
-	if plain := m.findingRow(item, false); strings.Contains(plain, band) {
+	if plain := m.findingRow(item, false, m.width); strings.Contains(plain, band) {
 		t.Fatal("a row the cursor is not on was painted too")
 	}
 }

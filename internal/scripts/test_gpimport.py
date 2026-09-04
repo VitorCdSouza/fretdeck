@@ -96,3 +96,47 @@ def test_describe_marks_a_track_with_no_strings(tmp_path):
     song.tracks[0].isPercussionTrack = True
 
     assert gpimport.describe(song)[0]["playable"] is False
+
+
+def played(fret, string=6, **effects):
+    """one note with whatever was written on it, for the technique to read."""
+    song = guitarpro.Song()
+    beat = guitarpro.Beat(song.tracks[0].measures[0].voices[0])
+    note = guitarpro.Note(beat)
+    note.string = string
+    note.value = fret
+
+    for name, value in effects.items():
+        setattr(note.effect, name, value)
+
+    return beat, note
+
+
+def test_a_bend_is_what_the_note_is_worth_whatever_else_is_on_it():
+    beat, note = played(7, bend=guitarpro.BendEffect(), hammer=True)
+
+    assert gpimport.technique(beat, note, {}) == "bend"
+
+
+def test_the_direction_says_hammer_on_or_pull_off():
+    beat, note = played(7, hammer=True)
+    assert gpimport.technique(beat, note, {"6": None}) == "hammer"
+
+    beat, note = played(5, hammer=True)
+    assert gpimport.technique(beat, note, {6: {"fret": 7}}) == "pull"
+
+    beat, note = played(7, hammer=True)
+    assert gpimport.technique(beat, note, {6: {"fret": 5}}) == "hammer"
+
+
+def test_a_note_with_nothing_written_on_it_carries_nothing():
+    beat, note = played(7)
+
+    assert gpimport.technique(beat, note, {}) == ""
+
+
+def test_a_plain_note_gets_no_key_at_all(tmp_path):
+    path = write(tmp_path, [(6, 3, guitarpro.NoteType.normal)])
+    converted = gpimport.convert(guitarpro.parse(path), 0)
+
+    assert "tech" not in converted["notes"][0]

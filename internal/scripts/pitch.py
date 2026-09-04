@@ -24,6 +24,29 @@ THRESHOLD = 0.12
 # decaying into nothing would otherwise keep producing octave noise
 SILENCE_RMS = 0.012
 
+# the two tones the metronome clicks with, as fractional midi numbers. they sit
+# half a semitone off the grid a fretboard is written on, and both are above
+# FMAX, so the click is never named as itself and what it can be mistaken for
+# is a pitch no string is ever tuned to
+CLICK_MIDI = 101.5
+ACCENT_MIDI = 106.5
+
+# how near one of those a frame has to be before it is taken for the click. a
+# guitar a quarter tone out of tune is still nearer its own note than this
+CLICK_TOLERANCE = 0.3
+
+# how far down a subharmonic yin can be fooled into naming. it picks the first
+# dip inside the range it searches, which for a tone this high is the third
+CLICK_DEPTH = 5
+
+# how far off the grid a subharmonic has to land to be worth staying deaf to.
+# a third of a frequency is not a whole number of semitones down from it, so
+# some of them come back near a real note, and one of those is a band that
+# would swallow a string somebody is playing slightly out of tune. they are
+# also the ones yin never reaches, since it names the first dip and not the
+# fifth
+CLICK_CLEAR = 0.4
+
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 
@@ -39,6 +62,26 @@ def midi_from_freq(freq):
 
 def freq_from_midi(midi):
     return 440.0 * (2.0 ** ((midi - 69.0) / 12.0))
+
+
+def click_pitches():
+    """every midi number the metronome can be heard as.
+
+    the tone itself is over the highest note the detector names, so it only
+    ever arrives as one of its own subharmonics. dividing a frequency by a
+    whole number is a whole number of semitones only for the octave, so each
+    one is worked out rather than stepped down by twelve.
+    """
+    found = []
+    for tone in (CLICK_MIDI, ACCENT_MIDI):
+        for step in range(1, CLICK_DEPTH + 1):
+            pitch = tone - 12.0 * math.log2(step)
+            if abs(pitch - round(pitch)) >= CLICK_CLEAR:
+                found.append(pitch)
+    return tuple(found)
+
+
+CLICK_PITCHES = click_pitches()
 
 
 def _difference(frame):
@@ -151,6 +194,10 @@ class Tracker:
         self.floor = None
         self.since_rise = self.ATTACK_MEMORY
 
+        # the pitches to stay deaf to, which is the metronome and nothing else.
+        # it is empty unless a click is sounding into an open microphone
+        self.deaf = ()
+
     def rose(self, rms):
         """updates the floor with this frame and answers whether the level rose
         over it, which is what the start of a note looks like."""
@@ -166,6 +213,14 @@ class Tracker:
         self.since_rise = 0 if rose else self.since_rise + 1
         return rose
 
+    def deafened(self, freq):
+        """whether the frame is the metronome rather than a string."""
+        if freq <= 0.0 or not self.deaf:
+            return False
+
+        exact = midi_from_freq(freq)
+        return any(abs(exact - pitch) < CLICK_TOLERANCE for pitch in self.deaf)
+
     def attacked(self):
         """whether a string was struck recently enough to have begun a note."""
         return self.since_rise < self.ATTACK_MEMORY
@@ -174,6 +229,11 @@ class Tracker:
         """feeds one frame, returns a note dict when a new note starts."""
         freq, confidence, rms = detect(frame, self.sample_rate)
         self.rose(rms)
+
+        # the click is not a note and the frame it lands in says nothing about
+        # the string either, so it is dropped rather than counted as silence
+        if self.deafened(freq):
+            return None
 
         if freq == 0.0 or confidence < self.MIN_CONFIDENCE:
             self.silence += 1

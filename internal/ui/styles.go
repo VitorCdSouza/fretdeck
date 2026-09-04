@@ -46,6 +46,16 @@ func (on rowPaint) of(style lipgloss.Style) lipgloss.Style {
 	return style.Background(colorRow)
 }
 
+// fill pads a line out to the width of the column it is in, with the band
+// behind it, so the row under the cursor is painted across the whole column
+func (on rowPaint) fill(line string, width int) string {
+	gap := width - lipgloss.Width(line)
+	if gap < 1 {
+		return truncate(line, width)
+	}
+	return line + on.of(lipgloss.NewStyle()).Render(strings.Repeat(" ", gap))
+}
+
 // pad is the pad of a row, with the gap between its halves painted too
 func (on rowPaint) pad(left, right string, width int) string {
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -176,11 +186,22 @@ func plural(count int, noun string) string {
 	return fmt.Sprintf("%d %ss", count, noun)
 }
 
-// sectionHead is the small caps title every screen opens with.
-func (m *Model) sectionHead(title, right string) string {
+// columnHead is the small caps title a section opens with, and what it has to
+// say about itself against the right edge of the column it is drawn in.
+func columnHead(title, right string, width int) string {
 	left := "  " + styleAccent.Render(title)
-	if right == "" {
+
+	// what the head says about itself goes when the column is too narrow for
+	// both, since the title is the half that says what the list is
+	if right == "" || lipgloss.Width(left)+len(right)+4 > width {
 		return left
 	}
-	return pad(left, styleFaint.Render(right), m.width)
+
+	return pad(left, styleFaint.Render(right), width)
+}
+
+// sectionHead is that head over the whole window, which is what a screen that
+// draws a single column uses.
+func (m *Model) sectionHead(title, right string) string {
+	return columnHead(title, right, m.width)
 }

@@ -21,9 +21,11 @@ func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
 
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
+		m.under(msg.X)
 		m.move(-1)
 		return nil
 	case tea.MouseButtonWheelDown:
+		m.under(msg.X)
 		m.move(1)
 		return nil
 	}
@@ -46,21 +48,44 @@ func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	if row, ok := m.rowAt(msg.Y); ok {
-		return m.point(row)
+	if run, row, ok := m.rowAt(msg.X, msg.Y); ok {
+		return m.point(run, row)
 	}
 
 	return nil
 }
 
-// rowAt is the row of the list drawn on a line of the screen.
-func (m *Model) rowAt(y int) (int, bool) {
+// rowAt is the row of the list drawn on a line of the screen, and the run it
+// came out of: the music screen draws two lists side by side, so the column
+// answers as much as the line does.
+func (m *Model) rowAt(x, y int) (clickable, int, bool) {
 	for _, run := range m.clicks {
-		if y >= run.top && y < run.top+run.count {
-			return run.first + y - run.top, true
+		step := run.step
+		if step < 1 {
+			step = 1
 		}
+		if y < run.top || y >= run.top+run.count*step {
+			continue
+		}
+		if run.width > 0 && (x < run.left || x >= run.left+run.width) {
+			continue
+		}
+		return run, run.first + (y-run.top)/step, true
 	}
-	return 0, false
+	return clickable{}, 0, false
+}
+
+// under puts the keys on the column the pointer is over, so the wheel scrolls
+// the list it is on and not the one the keys were left on.
+func (m *Model) under(x int) {
+	if m.screen != screenMusic {
+		return
+	}
+
+	m.focus = paneSearch
+	if x < m.sidebarWidth() {
+		m.focus = paneRecent
+	}
 }
 
 // point puts the cursor of the screen on a row, which is all a click does. It
@@ -68,10 +93,11 @@ func (m *Model) rowAt(y int) (int, bool) {
 //
 // The login is the one thing it presses, because the spotify screen with no
 // session on it is a single button and there is nothing there to select.
-func (m *Model) point(row int) tea.Cmd {
+func (m *Model) point(run clickable, row int) tea.Cmd {
 	switch m.screen {
 	case screenMusic:
-		m.found = clamp(row, len(m.results))
+		m.focus = run.side
+		m.setMusicCursor(row)
 	case screenConfig:
 		m.configRow = clamp(row, m.configCount())
 	case screenSpotify:

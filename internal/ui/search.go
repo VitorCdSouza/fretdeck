@@ -18,8 +18,11 @@ import (
 )
 
 // The one way in. Every song comes through here: the search reads tabs off
-// ultimate guitar, and with nothing typed the screen is the list of what has
-// been played, which is the way back to whatever was being worked on.
+// ultimate guitar, and beside it, down the left, is what has been played,
+// which is the way back to whatever was being worked on.
+//
+// The two are columns of the one screen and both are drawn the whole time, so
+// coming back to a song costs no keystroke. h and l walk between them.
 //
 // Songsterr is still here and is no longer a screen. What it answers is the
 // difficulty beside a row, looked up quietly behind the list.
@@ -35,6 +38,21 @@ const (
 	sourceUltimate
 	sourceTracks
 )
+
+// pane is which of the two columns of the music screen the keys are on. What
+// was played is the one it opens on, since a search nobody has typed yet has
+// nothing to walk through.
+type pane int
+
+const (
+	paneRecent pane = iota
+	paneSearch
+)
+
+// keptLines is how many lines a song of the left column takes. The title, and
+// under it who wrote it and when it was last played: one line cannot hold the
+// three in a column that narrow, and the title on its own is not a song list.
+const keptLines = 2
 
 // finding is one row.
 type finding struct {
@@ -60,7 +78,23 @@ type finding struct {
 	Rating  float64
 	Votes   int
 	Played  time.Time
+
+	// Group is the song a version belongs to, and Count is how many versions
+	// are in it. A row with a Count is the head of its group and the best of
+	// them; one with a Count of one is that version and nothing to open
+	Group string
+	Count int
+	Open  bool
 }
+
+// heads answers whether a row opens into others, which is the one thing that
+// makes enter mean something else on it.
+func (f finding) heads() bool { return f.Count > 1 }
+
+// under answers whether a row is one of the versions of an opened song rather
+// than a song on the list. Its name is on the row above it, so it is drawn as
+// the version it is.
+func (f finding) under() bool { return f.Group != "" && f.Count == 0 }
 
 func (f finding) Have() bool { return f.Path != "" }
 
@@ -117,13 +151,21 @@ func (m *Model) searchUltimate(pattern string) tea.Cmd {
 	}
 }
 
-// showTabs turns an ultimate guitar answer into rows. What cannot be read
-// stays on the list rather than disappearing, since knowing a song is only up
-// as chords is worth the line it takes.
+// showTabs turns an ultimate guitar answer into rows: one per song, with the
+// versions of it held aside until the row is opened. A search there answers a
+// dozen transcriptions of the one song and a list of twenty rows for three
+// songs is a list nobody reads. What cannot be read stays on the list rather
+// than disappearing, since knowing a song is only up as chords is worth the
+// line it takes.
 func (m *Model) showTabs(results []ultimate.Result) {
-	m.results = make([]finding, 0, len(results))
+	m.results = nil
+	m.groups = map[string][]finding{}
+
+	// the order the site answered in is the relevance of what was typed, so
+	// the groups keep it and only the versions inside one are reordered
+	var order []string
 	for _, item := range results {
-		m.results = append(m.results, finding{
+		row := finding{
 			From:    sourceUltimate,
 			Artist:  item.Artist,
 			Title:   item.Title,
@@ -135,11 +177,116 @@ func (m *Model) showTabs(results []ultimate.Result) {
 			Votes:   item.Votes,
 			URL:     item.URL,
 			Path:    m.owned(item.Artist, item.Title),
+			Group:   groupOf(item),
+		}
+
+		if _, held := m.groups[row.Group]; !held {
+			order = append(order, row.Group)
+		}
+		m.groups[row.Group] = append(m.groups[row.Group], row)
+	}
+
+	for _, key := range order {
+		versions := m.groups[key]
+		sort.SliceStable(versions, func(i, j int) bool {
+			return popularity(versions[i]) > popularity(versions[j])
 		})
+		m.groups[key] = versions
+
+		// the row on the list is the best version of the group, so the preview
+		// reads that one and a group of one needs no opening at all
+		head := versions[0]
+		head.Count = len(versions)
+		m.results = append(m.results, head)
 	}
 
 	m.sortByInstrument()
 	m.found = 0
+	m.focus = paneSearch
+}
+
+// groupOf is what tells one song from another on that list. The instrument is
+// part of it: a bass transcription is not a version of the guitar one, it is
+// somebody else's part, and a chord sheet is neither.
+func groupOf(item ultimate.Result) string {
+	return songsterr.Key(item.Artist, item.Title) + " " + item.Kind
+}
+
+// prior and middling are what a rating is weighed against, so the versions of
+// a song come out in the order people actually rate them. A 5.0 that two
+// people voted on is not the best transcription of anything and a plain sort
+// by rating puts it over the one three hundred people stand behind.
+const (
+	prior    = 25.0
+	middling = 3.0
+)
+
+// popularity is the rating a version is ordered by, pulled towards middling by
+// how few votes it has. An unrated one lands on middling itself, which is
+// under anything well liked and over anything people voted down.
+func popularity(item finding) float64 {
+	votes := float64(item.Votes)
+	return (votes*item.Rating + prior*middling) / (votes + prior)
+}
+
+// expand puts the versions of a group under its row, the best liked first, and
+// takes them away again. What songsterr said is the song's and not the
+// version's, so it is carried down rather than looked up a second time.
+func (m *Model) expand(index int) {
+	head := m.results[index]
+	if head.Open {
+		m.collapse(index)
+		return
+	}
+
+	rows := make([]finding, 0, head.Count)
+	for _, version := range m.groups[head.Group] {
+		version.State, version.Level = head.State, head.Level
+		rows = append(rows, version)
+	}
+
+	m.results[index].Open = true
+	m.results = append(m.results[:index+1], append(rows, m.results[index+1:]...)...)
+}
+
+// collapse takes the versions of a group back off the list. They sit directly
+// under their head and carry no count of their own, which is what says where
+// the group ends.
+func (m *Model) collapse(index int) {
+	end := index + 1
+	for end < len(m.results) && m.results[end].Group == m.results[index].Group &&
+		!m.results[end].heads() {
+		end++
+	}
+
+	m.results[index].Open = false
+	m.results = append(m.results[:index+1], m.results[end:]...)
+	m.found = clamp(index, len(m.results))
+}
+
+// heading is the group row the cursor is on or under, and whether there is one
+// at all: a version sits directly beneath the row it was opened out of, and a
+// song with a single version is a group of nobody.
+func (m *Model) heading() (int, bool) {
+	if m.found >= len(m.results) {
+		return 0, false
+	}
+
+	row := m.results[m.found]
+	if row.heads() {
+		return m.found, true
+	}
+
+	for index := m.found - 1; index >= 0; index-- {
+		if m.results[index].Group != row.Group {
+			return 0, false
+		}
+		if m.results[index].heads() {
+			return index, true
+		}
+	}
+
+	return 0, false
 }
 
 // sortByInstrument puts the tabs written for what is plugged in at the top.
@@ -156,15 +303,14 @@ func (m *Model) sortByInstrument() {
 	})
 }
 
-// showRecent is the screen with nothing typed: what has been read in and
-// played, newest first. A song that was removed keeps its place, since the
-// page it came from is still the answer to finding it again.
+// showRecent is the left column: what has been read in and played, newest
+// first. A song that was removed keeps its place, since the page it came from
+// is still the answer to finding it again.
 func (m *Model) showRecent() {
-	m.source = sourceRecent
-	m.results = make([]finding, 0, len(m.recent.Entries))
+	m.kept = make([]finding, 0, len(m.recent.Entries))
 
 	for _, entry := range m.recent.Entries {
-		m.results = append(m.results, finding{
+		m.kept = append(m.kept, finding{
 			From:    sourceRecent,
 			Artist:  entry.Artist,
 			Title:   entry.Title,
@@ -176,7 +322,31 @@ func (m *Model) showRecent() {
 		})
 	}
 
-	m.found = clamp(m.found, len(m.results))
+	m.keptRow = clamp(m.keptRow, len(m.kept))
+}
+
+// musicRows is the list the keys are walking, since the screen draws two and
+// only one of them has the cursor. Which one is what focus says.
+func (m *Model) musicRows() []finding {
+	if m.focus == paneRecent {
+		return m.kept
+	}
+	return m.results
+}
+
+func (m *Model) musicCursor() int {
+	if m.focus == paneRecent {
+		return m.keptRow
+	}
+	return m.found
+}
+
+func (m *Model) setMusicCursor(row int) {
+	if m.focus == paneRecent {
+		m.keptRow = clamp(row, len(m.kept))
+		return
+	}
+	m.found = clamp(row, len(m.results))
 }
 
 // onDisk is where the song of an entry is, and nothing when the file has gone.
@@ -284,11 +454,24 @@ func answerRows(items []finding, msg lookupMsg) {
 func stillLooking(items []finding) int {
 	waiting := 0
 	for _, item := range items {
-		if item.State == lookupWaiting {
+		// a version of an opened song is the same song as the row above it and
+		// is answered by the same lookup, so counting it counts twice
+		if item.State == lookupWaiting && !item.under() {
 			waiting++
 		}
 	}
 	return waiting
+}
+
+// songsIn is how many songs a list holds, which is not how many rows it draws:
+// a song answers a guitar row, a bass row and a chord sheet, and every one of
+// them opens into versions of itself.
+func songsIn(items []finding) int {
+	songs := map[string]bool{}
+	for _, item := range items {
+		songs[item.Key] = true
+	}
+	return len(songs)
 }
 
 // grab reads a tab and writes it into the library. The text is in the page, so
@@ -372,6 +555,7 @@ func (m *Model) grabbed(msg grabMsg) tea.Cmd {
 		}
 	}
 
+	m.showRecent()
 	m.status = fmt.Sprintf("%s read in, %d notes over %d measures, no rhythm in the source",
 		msg.title, msg.notes, msg.measures)
 
@@ -392,6 +576,7 @@ func (m *Model) practise(item finding) tea.Cmd {
 	if err := m.recent.Save(); err != nil {
 		m.fail = err.Error()
 	}
+	m.showRecent()
 
 	return nil
 }
@@ -409,35 +594,31 @@ func (m *Model) songAt(path string) *song.Song {
 // the only copy of a tab that was read in; one that is only remembered goes
 // without a word, because forgetting a line costs nothing.
 func (m *Model) remove() tea.Cmd {
-	if m.found >= len(m.results) {
+	items, row := m.musicRows(), m.musicCursor()
+	if row >= len(items) {
 		return nil
 	}
 
-	item := m.results[m.found]
+	item := items[row]
 	if item.Have() {
-		m.removing = true
+		m.removing, m.doomed = true, item
 		m.status = "remove " + item.Title + "?  y / n"
 		return nil
 	}
 
 	// a row of a search that was never read in has nothing behind it to
 	// remove, and only the recent list keeps a line of its own
-	if m.source != sourceRecent {
+	if m.focus != paneRecent {
 		m.status = "nothing of that one is here to remove"
 		return nil
 	}
 
-	return m.forget(m.found)
+	return m.forget(item)
 }
 
-// forget drops the row from the recent list, and the file with it when there
+// forget drops the song from the recent list, and the file with it when there
 // is one. The two go together: a song with neither is not a song any more.
-func (m *Model) forget(row int) tea.Cmd {
-	if row >= len(m.results) {
-		return nil
-	}
-
-	item := m.results[row]
+func (m *Model) forget(item finding) tea.Cmd {
 	m.status = "forgot " + item.Title
 
 	if item.Have() {
@@ -450,18 +631,21 @@ func (m *Model) forget(row int) tea.Cmd {
 		}
 		m.dropSong(item.Path)
 		m.status = "removed " + item.Title + " and its file"
+
+		// the search beside the column is drawn from a list of its own and
+		// would go on saying the song is here
+		for index := range m.results {
+			if m.results[index].Path == item.Path {
+				m.results[index].Path = ""
+			}
+		}
 	}
 
 	m.recent.Forget(item.entry())
 	if err := m.recent.Save(); err != nil {
 		m.fail = err.Error()
 	}
-
-	if m.source == sourceRecent {
-		m.showRecent()
-	} else {
-		m.results[row].Path = ""
-	}
+	m.showRecent()
 
 	return m.loadSongs()
 }
@@ -482,14 +666,19 @@ func (m *Model) keySearch(key string) tea.Cmd {
 	switch key {
 	// the field is on the screen already, and i is what puts the cursor in it
 	case "i":
+		m.focus = paneSearch
 		return m.ask(askingQuery, "artist and song, on ultimate guitar", m.query)
 
 	case "enter":
 		return m.enterSearch()
 
-	// l walks into a list and no further. reading a tab in and opening a song
-	// are both decisions, and the key for a decision is enter
+	// l walks over to the search, and no further. reading a tab in and opening
+	// a song are both decisions, and the key for a decision is enter
 	case "l":
+		if m.focus == paneRecent {
+			m.focus = paneSearch
+			return nil
+		}
 		m.status = "enter opens the row"
 		return nil
 
@@ -497,24 +686,48 @@ func (m *Model) keySearch(key string) tea.Cmd {
 		return m.remove()
 
 	case "h", "esc":
-		if m.source == sourceUltimate {
+		if m.focus == paneRecent {
+			return nil
+		}
+		// h closes the group the cursor is in before it leaves the list, since
+		// a key that opens something has to close it too
+		if index, ok := m.heading(); ok && m.results[index].Open && key == "h" {
+			m.collapse(index)
+			return nil
+		}
+
+		// esc clears what was searched and h leaves it standing, since one of
+		// them is done with the answer and the other is coming back to it
+		m.focus = paneRecent
+		if key == "esc" {
 			m.query = ""
-			m.showRecent()
+			m.results = nil
+			m.found = 0
 		}
 	}
 
 	return nil
 }
 
-// enterSearch is the one key that means the same thing on every list: play the
-// song when it is here, and go and get it when it is not. It is enter and not
-// l, since it is the key that ends up starting a take.
+// enterSearch is the one key that means the same thing on either column: play
+// the song when it is here, and go and get it when it is not. It is enter and
+// not l, since it is the key that ends up starting a take.
 func (m *Model) enterSearch() tea.Cmd {
-	if m.found >= len(m.results) {
+	items, row := m.musicRows(), m.musicCursor()
+	if row >= len(items) {
 		return nil
 	}
 
-	item := m.results[m.found]
+	item := items[row]
+
+	// a song with more than one transcription of it opens into them first:
+	// which version to read is a question and enter is what answers one. What
+	// has no frets in it opens into nothing, since none of them can be read
+	if item.heads() && ultimate.Playable(item.Kind) {
+		m.expand(row)
+		return nil
+	}
+
 	if item.Have() {
 		return m.practise(item)
 	}
@@ -531,7 +744,7 @@ func (m *Model) enterSearch() tea.Cmd {
 // page of its own falls back to.
 func (m *Model) askUltimate(pattern string) tea.Cmd {
 	m.query = pattern
-	m.source = sourceUltimate
+	m.focus = paneSearch
 	m.results = nil
 	m.found = 0
 	m.seeking = true
@@ -540,53 +753,163 @@ func (m *Model) askUltimate(pattern string) tea.Cmd {
 	return m.searchUltimate(pattern)
 }
 
+// viewSearch is the two columns: what was played down the left and the search
+// beside it, with one rule between them. Both are drawn every frame, and focus
+// is the only thing that says which of them the keys are on.
 func (m *Model) viewSearch() string {
-	if m.seeking && len(m.results) == 0 {
-		return m.viewSpinner(m.searchBox(), "searching ultimate guitar")
+	room := m.space()
+	side := m.sidebarWidth()
+
+	// the rule takes a column of its own between the two
+	left := m.recentColumn(side, room)
+	right := m.searchColumn(m.width-side-1, room)
+
+	lines := make([]string, 0, room)
+	for index := 0; index < room; index++ {
+		lines = append(lines, rowPaint(false).fill(at(left, index), side)+
+			styleRule.Render("\u2502")+at(right, index))
 	}
 
-	if m.source == sourceUltimate {
-		return m.viewFindings(m.searchBox(), "RESULTS", fmt.Sprintf("%s  ·  %s",
-			m.query, plural(len(m.results), "version")), m.results, m.found)
+	return strings.Join(lines, "\n")
+}
+
+// sidebarWidth is the column what was played is drawn in: a third of the
+// window, held between the width a title needs and the width that would leave
+// the search nothing.
+func (m *Model) sidebarWidth() int {
+	width := m.width / 3
+	switch {
+	case width < 22:
+		width = 22
+	case width > 38:
+		width = 38
+	}
+	if width > m.width/2 {
+		width = m.width / 2
+	}
+	return width
+}
+
+// at is one line of a column, and an empty one past the end of it: a column is
+// as tall as the window and not as tall as what is in it.
+func at(lines []string, index int) string {
+	if index >= len(lines) {
+		return ""
+	}
+	return lines[index]
+}
+
+// recentColumn is the left of the screen, and the way back to whatever was
+// being worked on. It is drawn a column short of its width, so the rule beside
+// it has a cell of its own and no row runs into it.
+func (m *Model) recentColumn(width, room int) []string {
+	width--
+	lines := []string{"", columnHead("RECENTLY PLAYED", plural(len(m.kept), "song"), width), ""}
+
+	if len(m.kept) == 0 {
+		return append(lines, wrapped("What you read in shows up here, so this column is the way back to it.", width)...)
+	}
+
+	start, end := window(m.keptRow, len(m.kept), (room-len(lines))/keptLines)
+	m.clicks = append(m.clicks, clickable{top: headerLines + len(lines), first: start,
+		count: end - start, width: width, step: keptLines, side: paneRecent})
+
+	for index := start; index < end; index++ {
+		lines = append(lines, m.recentRow(m.kept[index], index == m.keptRow, width)...)
+	}
+
+	return lines
+}
+
+// recentRow is one song of that column. The row under the cursor is painted
+// only while the column has the keys, since two lit rows on one screen say
+// nothing about which of them enter would open.
+func (m *Model) recentRow(item finding, selected bool, width int) []string {
+	paint := rowPaint(selected && m.focus == paneRecent)
+
+	mark, title := "  ", styleInk
+	if selected {
+		title = styleHeading
+		mark = paint.of(styleFaint).Render(" \u258e")
+		if m.focus == paneRecent {
+			mark = paint.of(styleAccent).Render(" \u258e")
+		}
+	}
+
+	// a song whose file has gone keeps its line, and the line says so
+	said := shortAgo(item.Played)
+	if !item.Have() {
+		said = "not here"
+	}
+
+	head := mark + " " + paint.of(title).Render(item.Title)
+	under := "   " + paint.of(styleFaint).Render(item.Artist)
+
+	return []string{
+		paint.fill(truncate(head, width), width),
+		paint.pad(truncate(under, width-len(said)-3),
+			paint.of(styleFaint).Render(said+" "), width),
+	}
+}
+
+// searchColumn is the right of the screen: the field, and under it whatever
+// the last search answered.
+func (m *Model) searchColumn(width, room int) []string {
+	lead := m.searchBox(width)
+
+	if m.seeking && len(m.results) == 0 {
+		return m.spinnerLines(lead, "searching ultimate guitar")
 	}
 
 	if len(m.results) == 0 {
-		return m.viewSearchEmpty()
+		return append(lead, m.searchHelp(width)...)
 	}
 
-	return m.viewFindings(m.searchBox(), "RECENTLY PLAYED",
-		plural(len(m.results), "song"), m.results, m.found)
+	return m.listColumn(lead, "RESULTS", plural(songsIn(m.results), "song"),
+		m.results, m.found, width, room, paneSearch)
 }
 
-func (m *Model) viewSearchEmpty() string {
-	lines := append(m.searchBox(),
-		m.sectionHead("RECENTLY PLAYED", ""),
-		"",
-		"  "+styleSubtle.Render("Nothing has been played yet. Press "+styleAccent.Render("i")+styleSubtle.Render(" and type a song.")),
-		"",
-		"  "+styleSubtle.Render("Ultimate Guitar answers with every version of it people have written,"),
-		"  "+styleSubtle.Render("and the text of the tab is in the page, so enter on one reads it into"),
-		"  "+styleSubtle.Render("the library without leaving here. Songsterr says how hard it is."),
-		"",
-		"  "+styleSubtle.Render("The spotify screen reads a playlist of yours the same way, sorted"),
-		"  "+styleSubtle.Render("from easiest to hardest, and enter on a song there searches here."),
-		"",
-		"  "+styleFaint.Render("What has been played shows up here, so this screen is the way back."),
-	)
+// searchHelp is that column with nothing searched yet. A field nobody has
+// typed in is a screen with no answer on it, so it says what the search
+// reaches and what enter on a row does.
+func (m *Model) searchHelp(width int) []string {
+	var lines []string
 
-	return strings.Join(lines, "\n") + blank(m.space()-len(lines))
+	for _, text := range []string{
+		"Press i and type an artist and a song.",
+		"Ultimate Guitar answers with every version of it people have written, and the text of the tab is in the page, so enter on one reads it into the library without leaving here.",
+		"Songsterr says how hard it is, and the spotify screen reads a playlist of yours the same way, sorted from easiest to hardest.",
+	} {
+		lines = append(lines, wrapped(text, width)...)
+		lines = append(lines, "")
+	}
+
+	return lines
 }
 
-// searchBox is the section at the top of the music screen. The field is on the
-// screen whether or not it has the cursor, since a search nobody can see is a
-// search nobody presses a key for, and i is what puts the cursor in it.
-func (m *Model) searchBox() []string {
+// wrapped is a paragraph broken to the column it is drawn in, since a line
+// written for the whole window runs off the side of one.
+func wrapped(text string, width int) []string {
+	block := styleSubtle.Width(width - 4).Render(text)
+
+	var lines []string
+	for _, line := range strings.Split(block, "\n") {
+		lines = append(lines, "  "+line)
+	}
+	return lines
+}
+
+// searchBox is the top of the right column. The field is on the screen whether
+// or not it has the cursor, since a search nobody can see is a search nobody
+// presses a key for, and i is what puts the cursor in it.
+func (m *Model) searchBox(width int) []string {
 	right := ""
 	if m.input.Focused() {
 		right = "enter searches, esc leaves it"
 	}
 
-	return []string{"", m.sectionHead("SEARCH", right), "", m.searchField(), ""}
+	return []string{"", columnHead("SEARCH", right, width), "",
+		truncate(m.searchField(), width), ""}
 }
 
 // searchField is the one line the query is typed on. What it holds does not
@@ -604,50 +927,61 @@ func (m *Model) searchField() string {
 	return caret + styleSubtle.Render("  "+m.query)
 }
 
-// viewSpinner is the screen while something is being waited for. The lead is
-// whatever the screen draws above it, since the music screen keeps its search
-// field on while it waits and the spotify screen has no field at all.
-func (m *Model) viewSpinner(lead []string, what string) string {
+// spinnerLines is the column while something is being waited for. The lead is
+// whatever is drawn above it, since the music screen keeps its search field on
+// while it waits and the spotify screen has no field at all.
+func (m *Model) spinnerLines(lead []string, what string) []string {
 	// the frame counter is the clock, so nothing has to be kept on the model
-	frames := []string{"◐", "◓", "◑", "◒"}
+	frames := []string{"\u25d0", "\u25d3", "\u25d1", "\u25d2"}
 	spin := frames[int(time.Now().UnixMilli()/120)%len(frames)]
 
-	lines := append(lead, "  "+styleAccent.Render(spin)+"  "+styleSubtle.Render(what))
+	return append(lead, "  "+styleAccent.Render(spin)+"  "+styleSubtle.Render(what))
+}
 
+func (m *Model) viewSpinner(lead []string, what string) string {
+	lines := m.spinnerLines(lead, what)
 	return strings.Join(lines, "\n") + blank(m.space()-len(lines))
 }
 
-// viewFindings is the list of songs, drawn the one way wherever the rows came
-// from: the music screen hands it a search and the spotify screen hands it a
-// playlist, and a song looks the same on both.
-func (m *Model) viewFindings(lead []string, head, right string, items []finding, cursor int) string {
+// listColumn is a list of songs drawn into a column, the one way wherever the
+// rows came from: the music screen hands it a search and the spotify screen
+// hands it a playlist, and a song looks the same on both.
+func (m *Model) listColumn(lead []string, head, right string, items []finding,
+	cursor, width, room int, side pane) []string {
+
 	if len(items) == 0 {
-		lines := append(lead, styleSubtle.Render("  Nothing came back for that."))
-		return strings.Join(lines, "\n") + blank(m.space()-len(lines))
+		return append(lead, "  "+styleSubtle.Render("Nothing came back for that."))
 	}
 
 	if waiting := stillLooking(items); waiting > 0 {
-		right = fmt.Sprintf("%s  ·  %d still looking", right, waiting)
+		right = fmt.Sprintf("%s  \u00b7  %d still looking", right, waiting)
 	}
 
-	lines := append(lead, m.sectionHead(head, right), "")
+	lines := append(lead, columnHead(head, right, width), "")
 
-	// the bottom half of the screen is the tab of the row under the cursor,
-	// and the list has what is left
-	pane := m.viewPreview(m.space() / 2)
+	// the bottom of the column is the tab of the row under the cursor, and the
+	// list has what is left
+	shown := m.viewPreview(width, room/2)
 
-	start, end := window(cursor, len(items), m.space()-len(lines)-len(pane))
-	m.clicks = []clickable{{top: headerLines + len(lines), first: start, count: end - start}}
+	start, end := window(cursor, len(items), room-len(lines)-len(shown))
+	m.clicks = append(m.clicks, clickable{top: headerLines + len(lines), first: start,
+		count: end - start, left: m.width - width, width: width, side: side})
 
 	for index := start; index < end; index++ {
-		lines = append(lines, m.findingRow(items[index], index == cursor))
+		lines = append(lines, m.findingRow(items[index], index == cursor, width))
 	}
 
-	for len(lines) < m.space()-len(pane) {
+	for len(lines) < room-len(shown) {
 		lines = append(lines, "")
 	}
-	lines = append(lines, pane...)
 
+	return append(lines, shown...)
+}
+
+// viewFindings is that list over the whole window, which is what a screen
+// drawing one column of it uses.
+func (m *Model) viewFindings(lead []string, head, right string, items []finding, cursor int) string {
+	lines := m.listColumn(lead, head, right, items, cursor, m.width, m.space(), paneSearch)
 	return strings.Join(lines, "\n") + blank(m.space()-len(lines))
 }
 
@@ -674,21 +1008,54 @@ func window(cursor, count, room int) (int, int) {
 	return start, end
 }
 
-// findingRow is the one row shared by the three lists, so a song looks the
-// same wherever it came from.
-func (m *Model) findingRow(item finding, selected bool) string {
+// findingRow is the one row shared by the lists a site answered, so a song
+// looks the same wherever it came from.
+func (m *Model) findingRow(item finding, selected bool, width int) string {
 	paint := rowPaint(selected)
 
-	mark, title := "   ", paint.of(styleInk).Render(item.Title)
+	mark := "   "
 	if selected {
-		mark, title = paint.of(styleAccent).Render(" ▎ "), paint.of(styleHeading).Render(item.Title)
+		mark = paint.of(styleAccent).Render(" \u258e ")
 	}
 
-	left := mark + title + paint.of(styleFaint).Render("   "+item.Artist)
+	left := mark + m.nameOf(item, paint, selected)
 	right := m.rightOf(item, paint)
 
-	return paint.pad(truncate(left, m.width-lipgloss.Width(right)-3),
-		right+paint.of(styleFaint).Render(" "), m.width)
+	return paint.pad(truncate(left, width-lipgloss.Width(right)-3),
+		right+paint.of(styleFaint).Render(" "), width)
+}
+
+// nameOf is the left half of a row: the song with its artist beside it, and a
+// version of an opened song written as the version it is, since the name of it
+// is on the row it came out of.
+func (m *Model) nameOf(item finding, paint rowPaint, selected bool) string {
+	title := styleInk
+	if selected {
+		title = styleHeading
+	}
+
+	if item.under() {
+		return paint.of(styleFaint).Render("    ") +
+			paint.of(title).Render(fmt.Sprintf("version %d", item.Version))
+	}
+
+	// the arrow is what says a row opens and which way it is pointing now, and
+	// the two cells it takes are kept on every row of the list so a song with
+	// one transcription of it stands in the same column as the rest
+	open := ""
+	if item.From == sourceUltimate {
+		open = paint.of(styleFaint).Render("  ")
+		if item.heads() && ultimate.Playable(item.Kind) {
+			if item.Open {
+				open = paint.of(styleAccent).Render("▾ ")
+			} else {
+				open = paint.of(styleAccent).Render("▸ ")
+			}
+		}
+	}
+
+	return open + paint.of(title).Render(item.Title) +
+		paint.of(styleFaint).Render("   "+item.Artist)
 }
 
 // rightOf is what the site the row came from says about it, with the mark for
@@ -696,11 +1063,8 @@ func (m *Model) findingRow(item finding, selected bool) string {
 func (m *Model) rightOf(item finding, paint rowPaint) string {
 	right := m.saidAbout(item, paint)
 
-	switch {
-	case item.Have():
+	if item.Have() {
 		right = paint.of(styleOk).Render("in library") + paint.of(styleFaint).Render("   ") + right
-	case item.From == sourceRecent:
-		right = paint.of(styleFaint).Render("not here") + paint.of(styleFaint).Render("   ") + right
 	}
 
 	return right
@@ -709,14 +1073,18 @@ func (m *Model) rightOf(item finding, paint rowPaint) string {
 // saidAbout draws what is known about a row. A recent one says when it was played,
 // which is what that list is sorted by and the only question it answers.
 func (m *Model) saidAbout(item finding, paint rowPaint) string {
-	if item.From == sourceRecent {
-		return paint.of(styleFaint).Render(ago(item.Played))
-	}
 	if item.Kind != "" && !ultimate.Playable(item.Kind) {
 		return paint.of(styleFaint).Render(strings.ToLower(item.Kind))
 	}
 
 	written := m.versionOf(item, paint)
+
+	// the difficulty is the song's and the row above carries it: printing it
+	// again on every version of it says nothing new
+	if item.under() {
+		return written
+	}
+
 	if written != "" {
 		written += paint.of(styleFaint).Render("   ")
 	}
@@ -757,10 +1125,29 @@ func (m *Model) versionOf(item finding, paint rowPaint) string {
 		return ""
 	}
 
+	// the number of a version is on the left of an opened row, so what is left
+	// to say about it here is how people rated it
 	written := paint.of(styleFaint).Render(fmt.Sprintf("v%d", item.Version))
+	if item.under() {
+		written = ""
+	}
+	if item.heads() {
+		written = paint.of(styleSubtle).Render(plural(item.Count, "version"))
+	}
+
 	if (item.Kind == ultimate.KindBass) != m.instrument().Bass {
-		written = paint.of(styleSubtle).Render(played(item.Kind)) +
-			paint.of(styleFaint).Render("  "+written)
+		instrument := paint.of(styleSubtle).Render(played(item.Kind))
+		if written != "" {
+			instrument += paint.of(styleFaint).Render("  ")
+		}
+		written = instrument + written
+	}
+
+	// how the best of them was rated is on the version itself once the row is
+	// opened, and a count beside a rating beside a level is three numbers on a
+	// row that answers one question
+	if item.heads() {
+		return written
 	}
 
 	if item.Votes == 0 {
@@ -785,8 +1172,9 @@ func played(kind string) string {
 	return "guitar"
 }
 
-// ago is how long since a song was played, in the one unit that answers.
-func ago(when time.Time) string {
+// shortAgo is how long since a song was played, in the two or three cells the
+// column has for it.
+func shortAgo(when time.Time) string {
 	if when.IsZero() {
 		return ""
 	}
@@ -794,14 +1182,12 @@ func ago(when time.Time) string {
 	since := time.Since(when)
 	switch {
 	case since < time.Minute:
-		return "just now"
+		return "now"
 	case since < time.Hour:
-		return fmt.Sprintf("%d minutes ago", int(since.Minutes()))
+		return fmt.Sprintf("%dm", int(since.Minutes()))
 	case since < 24*time.Hour:
-		return plural(int(since.Hours()), "hour") + " ago"
-	case since < 48*time.Hour:
-		return "yesterday"
+		return fmt.Sprintf("%dh", int(since.Hours()))
 	}
 
-	return plural(int(since.Hours()/24), "day") + " ago"
+	return fmt.Sprintf("%dd", int(since.Hours()/24))
 }

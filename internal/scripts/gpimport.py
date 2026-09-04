@@ -83,6 +83,47 @@ def tempo_at(changes, tick):
     return tempo
 
 
+def tapped(beat):
+    """whether the beat is tapped, which guitar pro keeps on the beat and not
+    on the note, in the same field as the slap and the pop."""
+    slap = getattr(beat.effect, "slapEffect", None)
+    return slap is not None and getattr(slap, "name", "") == "tapping"
+
+
+def technique(beat, note, ringing):
+    """the one technique the note is worth, hardest first.
+
+    a note carries several of them at once and the app puts each on one rung of
+    a ladder, so the hardest is the one that says what the note is worth. the
+    ones that are only a way of ringing a note that was already struck come
+    last, since a bend over a hammer on is still a bend to play.
+    """
+    effect = note.effect
+
+    if effect.bend is not None:
+        return "bend"
+    if effect.harmonic is not None:
+        return "harmonic"
+    if tapped(beat):
+        return "tap"
+    if effect.vibrato:
+        return "vibrato"
+    if effect.palmMute:
+        return "palm"
+    if effect.slides:
+        return "slide"
+
+    if effect.hammer:
+        # guitar pro writes one flag for both, and which of the two it is is
+        # the direction: a note over the one still ringing is hammered on
+        held = ringing.get(note.string)
+        if held is not None and note.value < held["fret"]:
+            return "pull"
+        return "hammer"
+
+    return ""
+
+
 def convert(song, index):
     track = song.tracks[index]
     if not playable(track):
@@ -136,6 +177,7 @@ def convert(song, index):
                             held["dur"] = round(end_time - held["time"], 4)
                         continue
 
+                    how = technique(beat, note, ringing)
                     entry = {
                         "measure": header.number,
                         "beat": round(start / QUARTER, 4),
@@ -145,6 +187,11 @@ def convert(song, index):
                         "fret": note.value,
                         "midi": open_midi[note.string] + note.value,
                     }
+                    # a note picked plain carries no key at all, so a file
+                    # written before this reads back the same either way
+                    if how:
+                        entry["tech"] = how
+
                     notes.append(entry)
                     ringing[note.string] = entry
 

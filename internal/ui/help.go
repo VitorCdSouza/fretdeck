@@ -16,7 +16,7 @@ type binding struct {
 }
 
 // global is the set that works on every screen. It is listed once, in the help,
-// and never repeated in the bar at the bottom.
+// and nowhere else.
 var global = []binding{
 	{"H L", "previous/next screen"},
 	{"i", "insert mode: type in the search field"},
@@ -26,8 +26,9 @@ var global = []binding{
 	{"q", "quit"},
 }
 
-// bindings is what this screen does, most used first. The first four go in the
-// bar at the bottom, and all of them go in the help.
+// bindings is what this screen does, most used first. The help behind the
+// question mark is drawn from it and nothing else is, so a key that is not in
+// here is a key nobody finds.
 func (m *Model) bindings() []binding {
 	if m.input.Focused() {
 		return []binding{
@@ -57,10 +58,11 @@ func (m *Model) bindings() []binding {
 
 	switch m.screen {
 	case screenMusic:
-		if m.source == sourceRecent {
+		if m.focus == paneRecent {
 			return []binding{
 				{"i", "search song"},
 				{"j k", "up/down"},
+				{"l", "over to the search"},
 				{"enter", "practise it"},
 				{"d", "remove it"},
 				{"g G", "first/last"},
@@ -68,10 +70,11 @@ func (m *Model) bindings() []binding {
 		}
 		return []binding{
 			{"j k", "up/down"},
-			{"enter", "read it in, or practise it"},
+			{"enter", "open the versions, or read one in"},
+			{"h", "close the versions, or back to what was played"},
 			{"i", "search again"},
 			{"d", "remove"},
-			{"h esc", "what was played"},
+			{"esc", "clear the search"},
 			{"g G", "first/last"},
 		}
 
@@ -83,6 +86,9 @@ func (m *Model) bindings() []binding {
 			{"h l", "note"},
 			{"[ ]", "measure"},
 			{"+ -", "speed"},
+			{"b", "beats per minute"},
+			{"c", "the click on or off"},
+			{"d", "how much of it to ask for"},
 			{"r", "repeat a passage"},
 			{"R", "start over"},
 			{"esc bksp", "back to the songs"},
@@ -138,37 +144,11 @@ func (m *Model) bindings() []binding {
 	return nil
 }
 
-// bar is the line at the bottom. Four keys is what fits without the eye
-// skipping the lot, and the rest lives behind the question mark, which is why
-// the question mark is the one chip that is never dropped: a key cut off the
-// end of the line is a key nobody finds twice.
-func (m *Model) bar(room int) string {
-	shown := m.bindings()
-	if len(shown) > 4 {
-		shown = shown[:4]
-	}
-
-	help := chip(binding{"?", "keys"})
-	gap := styleFaint.Render("   ")
-
-	parts := make([]string, 0, len(shown)+1)
-	width := lipgloss.Width(help)
-	for _, item := range shown {
-		next := chip(item)
-		width += lipgloss.Width(next) + 3
-		if width > room {
-			break
-		}
-		parts = append(parts, next)
-	}
-
-	return strings.Join(append(parts, help), gap)
-}
-
+// chip is one key and what it does, in the shape the bar at the bottom draws.
+// The bar is the question mark and nothing else now: a screen with a dozen
+// keys said them in a line and a half of chips, and a line and a half of the
+// window is worth more than a map that is behind one key anyway.
 func chip(item binding) string {
-	if item.keys == "" {
-		return styleFaint.Render(item.what)
-	}
 	return styleAccent.Render(keyLabel(item.keys)) + " " + styleFaint.Render(item.what)
 }
 
@@ -192,24 +172,54 @@ func keyLabel(keys string) string {
 // viewHelp is the whole map on one screen. It opens over whatever was there
 // and the next key closes it, so it costs nothing to look at.
 func (m *Model) viewHelp() string {
-	lines := []string{"", m.sectionHead("KEYS", screenNames[m.screen]), ""}
+	head := []string{"", m.sectionHead("KEYS", screenNames[m.screen]), ""}
 
-	for _, item := range m.bindings() {
-		lines = append(lines, helpRow(item))
-	}
-
-	lines = append(lines, "", "  "+styleAccent.Render("EVERYWHERE"))
+	tail := []string{"", "  " + styleAccent.Render("EVERYWHERE")}
 	for _, item := range global {
-		lines = append(lines, helpRow(item))
+		tail = append(tail, helpRow(item))
 	}
-
-	lines = append(lines,
+	tail = append(tail,
 		"",
 		"  "+styleFaint.Render("movement is vim: j down, k up, h back, l in. any key closes this."),
 		"  "+styleFaint.Render("the mouse selects a row and opens a screen, and the config screen turns it off."),
 	)
 
+	lines := append(head, m.helpRows(m.bindings(), m.space()-len(head)-len(tail))...)
+	lines = append(lines, tail...)
+
 	return strings.Join(lines, "\n") + blank(m.space()-len(lines))
+}
+
+// helpRows is the screen's own keys, one to a line, or two side by side when
+// that is what it takes to fit the window. Nothing is ever left out: a key
+// that is not on the map is a key nobody finds.
+func (m *Model) helpRows(items []binding, room int) []string {
+	half := m.width / 2
+
+	if len(items) <= room || len(items) < 2 || half < 40 {
+		rows := make([]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, helpRow(item))
+		}
+		return rows
+	}
+
+	split := (len(items) + 1) / 2
+	rows := make([]string, 0, split)
+
+	for index := 0; index < split; index++ {
+		row := helpRow(items[index])
+		if index+split < len(items) {
+			gap := half - lipgloss.Width(row)
+			if gap < 2 {
+				gap = 2
+			}
+			row += strings.Repeat(" ", gap) + helpRow(items[index+split])
+		}
+		rows = append(rows, truncate(row, m.width))
+	}
+
+	return rows
 }
 
 func helpRow(item binding) string {

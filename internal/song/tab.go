@@ -67,7 +67,9 @@ func NewTab(s *Song, events []Event) *Tab {
 		frets := make(map[int]string, len(event.Notes))
 		widest := 1
 		for _, note := range event.Notes {
-			text := strconv.Itoa(note.Fret)
+			// the letter is the technique the level asks for, and a level that
+			// does not reach it has already taken it off the note
+			text := strconv.Itoa(note.Fret) + note.Technique.Mark()
 			frets[note.String] = text
 			if len(text) > widest {
 				widest = len(text)

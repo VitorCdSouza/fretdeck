@@ -36,6 +36,19 @@ type Config struct {
 	// Speed is the tempo multiplier the practice screen opens with
 	Speed float64 `json:"speed"`
 
+	// Bpm is the beat the metronome opens on. It is only used where the song
+	// has no tempo of its own to take one from, since a song that has one
+	// scales that instead and the two would otherwise disagree
+	Bpm float64 `json:"bpm"`
+
+	// Click says whether the metronome is heard as well as seen. It is off
+	// unless it was turned on: the input is open while it counts
+	Click bool `json:"click"`
+
+	// Level is how much of a transcription to ask for, by the name the song
+	// package gives it. An empty one is the bottom of the ladder
+	Level string `json:"level"`
+
 	// Mouse says whether the app asks the terminal for mouse events. It is on
 	// unless it was turned off, and turning it off gives text selection back
 	Mouse bool `json:"mouse"`
@@ -76,7 +89,15 @@ func defaults() Config {
 	if home, err := os.UserHomeDir(); err == nil {
 		library = filepath.Join(home, "fretdeck", "songs")
 	}
-	return Config{Device: -1, Rate: 44100, Library: library, Speed: 1, Mouse: true}
+	return Config{
+		Device:  -1,
+		Rate:    44100,
+		Library: library,
+		Speed:   1,
+		Bpm:     120,
+		Level:   "full",
+		Mouse:   true,
+	}
 }
 
 func Load() Config {
@@ -100,6 +121,12 @@ func Load() Config {
 	}
 	if loaded.Speed <= 0 {
 		loaded.Speed = 1
+	}
+	if loaded.Bpm <= 0 {
+		loaded.Bpm = defaults().Bpm
+	}
+	if loaded.Level == "" {
+		loaded.Level = defaults().Level
 	}
 	if loaded.Library == "" {
 		loaded.Library = defaults().Library

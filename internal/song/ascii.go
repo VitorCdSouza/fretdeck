@@ -178,10 +178,11 @@ func readColumns(block []string, tuning []String, measure int) ([][]Note, int) {
 			}
 			number := tuning[row].Number
 			event = append(event, Note{
-				Measure: measure,
-				String:  number,
-				Fret:    fret,
-				Midi:    tuning[row].Midi + fret,
+				Measure:   measure,
+				String:    number,
+				Fret:      fret,
+				Midi:      tuning[row].Midi + fret,
+				Technique: markAt(line, column),
 			})
 		}
 
@@ -227,6 +228,33 @@ func fretAt(line string, column int) (int, bool) {
 }
 
 func digit(b byte) bool { return b >= '0' && b <= '9' }
+
+// markAt is the technique written on the fret that starts at this column.
+//
+// A letter between two frets belongs to the one it leads to, since that is the
+// note it says how to reach: the 7 of 5h7 is hammered on and the 9 of 7b9 is
+// bent up to. A letter with no fret after it trails the note it is written
+// against, which is how vibrato is drawn.
+func markAt(line string, column int) Technique {
+	if column > 0 {
+		if found := ReadMark(rune(line[column-1])); found != "" {
+			return found
+		}
+	}
+
+	end := column
+	for end < len(line) && digit(line[end]) {
+		end++
+	}
+	if end >= len(line) {
+		return ""
+	}
+	if end+1 < len(line) && digit(line[end+1]) {
+		return ""
+	}
+
+	return ReadMark(rune(line[end]))
+}
 
 // layout spaces the events evenly and writes the measures out. The spacing is
 // not a rhythm and is not offered as one: it is what lets the tab have a width

@@ -45,11 +45,18 @@ var tabScreens = []screen{screenMusic, screenSpotify, screenTuner, screenConfig}
 const headerLines = 4
 
 // clickable is one run of rows on the screen: the line the first of them is on,
-// the cursor index it stands for, and how many follow it.
+// the cursor index it stands for, and how many follow it. left and width are
+// the columns it was drawn in and step is how many lines one of its rows
+// takes, since the music screen draws two lists beside each other and the rows
+// of one of them are two lines tall. A width of zero is the whole line.
 type clickable struct {
 	top   int
 	first int
 	count int
+	left  int
+	width int
+	step  int
+	side  pane
 }
 
 // frame is how often the clock and the animations are redrawn. Twenty five a
@@ -90,9 +97,11 @@ type Model struct {
 	// screen shows with nothing typed
 	recent config.Recent
 
-	// removing says d was pressed on a song that is on disk and the question
-	// is on the screen. Any key answers it, so the cursor cannot move under it
+	// removing says d was pressed on a song that is on disk and the question is
+	// on the screen. Any key answers it, so the cursor cannot move under it,
+	// and doomed is the song it was asked about
 	removing bool
+	doomed   finding
 
 	// listing says the device list has been asked for and has not come back
 	listing bool
@@ -117,16 +126,30 @@ type Model struct {
 	// drawing what the engine already knows, not a mode of its own
 	highway bool
 
+	// counting is the beat the sound side was last told to click. The command
+	// only goes down the pipe when the answer changes, since what it is worked
+	// out from is read twenty five times a second
+	counting counting
+
 	// the music screen, over ultimate guitar and over what was played, with
 	// songsterr answering for the difficulty beside a row
+	// it is two lists side by side: kept is what was played, down the left, and
+	// results is what the search answered. focus is the column the keys are on
 	songsterr *songsterr.Client
 	ultimate  *ultimate.Client
 	query     string
+	kept      []finding
+	keptRow   int
 	results   []finding
 	found     int
+	focus     pane
 	seeking   bool
-	source    source
 	lookups   chan lookupMsg
+
+	// groups holds the versions of every song a search answered, keyed the way
+	// the row on the list is. The list carries the best of each and the rest
+	// are put under it when the row is opened
+	groups map[string][]finding
 
 	// the spotify screen, which is a step at a time: the login, the playlists
 	// and the songs of the one that was opened. linked is whether there is a
@@ -179,6 +202,7 @@ type asking int
 const (
 	askingNothing asking = iota
 	askingQuery
+	askingBpm
 )
 
 // firstRun is what the config screen still has to ask. The two questions are asked in
@@ -190,6 +214,13 @@ const (
 	firstRunInstrument
 	firstRunInput
 )
+
+// counting is what the metronome was last asked for. A zero beat is the click
+// turned off, which is what leaving the practice screen looks like from here.
+type counting struct {
+	bpm   float64
+	beats int
+}
 
 // Options is what the command line can say. It is there so the app can be
 // opened on a song, or on an input, without walking the screens to get there
@@ -339,6 +370,27 @@ func (m *Model) askDevices() tea.Cmd {
 	return tea.Tick(6*time.Second, func(time.Time) tea.Msg { return lateMsg{} })
 }
 
+// count tells the sound side what to click, and says nothing when that is what
+// it is already clicking. The click is the practice screen's: it counts a song
+// that is open and nothing else, so walking away from one turns it off.
+func (m *Model) count(now time.Time) tea.Cmd {
+	want := counting{}
+	if m.engine != nil && m.engine.ClickOn() && m.screen == screenPractice {
+		want.bpm, want.beats = m.engine.Click(now)
+	}
+	if want == m.counting {
+		return nil
+	}
+	m.counting = want
+
+	command := bridge.Command{Action: "click", Bpm: want.bpm, Beats: want.beats}
+	worker := m.worker
+	return func() tea.Msg {
+		_ = worker.Send(command)
+		return nil
+	}
+}
+
 func (m *Model) listen() tea.Cmd {
 	command := bridge.Command{
 		Action: "listen",
@@ -358,20 +410,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.input.Width = msg.Width - 6
+		// the field is in the right column and not across the window
+		m.input.Width = msg.Width - m.sidebarWidth() - 8
 		return m, nil
 
 	case frameMsg:
 		if m.engine != nil {
 			m.engine.Tick(time.Time(msg))
 		}
-		return m, tea.Batch(tick(), m.resting(time.Time(msg)))
+		// the beat is worked out here and not at every key that can change it:
+		// a song changes tempo halfway through and nobody pressed anything
+		return m, tea.Batch(tick(), m.resting(time.Time(msg)), m.count(time.Time(msg)))
 
 	case songsMsg:
 		m.songs = msg
-		if m.source == sourceRecent {
-			m.showRecent()
-		}
+		m.showRecent()
 		m.markOwned()
 		return m, nil
 
@@ -515,6 +568,12 @@ func (m *Model) handle(event bridge.Event) tea.Cmd {
 		// the worker is opening it again on its own, so this is what is
 		// happening and not what went wrong
 		m.status = event.Message
+
+	case bridge.EventClickError:
+		// the click could not be played, which is not the listening failing.
+		// the count stays on the screen and the song goes on
+		m.counting = counting{}
+		m.fail = "the click could not be played: " + event.Message
 
 	case bridge.EventListenError, bridge.EventError, bridge.EventAudioWarning:
 		m.listing = false
@@ -858,29 +917,17 @@ func (m *Model) screenAt(x int) (screen, bool) {
 	return 0, false
 }
 
-// footer carries the keys of the screen on the left, and on the right whatever
-// the app has to say and the input in the corner. An error takes the line over,
-// since it is the only thing worth reading when there is one.
+// footer is one line: the way to the key map on the left and the input in the
+// corner. An error takes the line over, since it is the only thing worth
+// reading when there is one.
 func (m *Model) footer() string {
 	if m.fail != "" {
 		return rule(m.width) + "\n" + styleBad.Render(truncate(m.fail, m.width))
 	}
 
-	// the keys are served first and the input keeps its corner. what is left
-	// in the middle is what the status gets, since it is the line that can be
-	// missed without anything being lost
-	hearing := m.hearing()
-	keys := m.bar(m.width - lipgloss.Width(hearing) - 6)
+	keys := chip(binding{keys: "?", what: "keys"})
 
-	right := hearing
-	if m.status != "" {
-		room := m.width - lipgloss.Width(keys) - lipgloss.Width(hearing) - 6
-		if text := truncate(m.status, room); lipgloss.Width(text) > 8 {
-			right = styleSubtle.Render(text) + "   " + hearing
-		}
-	}
-
-	return rule(m.width) + "\n" + truncate(pad(keys, right, m.width), m.width)
+	return rule(m.width) + "\n" + truncate(pad(keys, m.hearing(), m.width), m.width)
 }
 
 // hearing is the input and the note coming in on it, in the corner furthest
@@ -894,12 +941,13 @@ func (m *Model) hearing() string {
 }
 
 // space is how many lines the body may use, once the header and the two lines
-// of the footer are taken out.
+// of the footer are taken out. The footer is two lines and never three now,
+// which is the line the list got back.
 func (m *Model) space() int {
 	if m.height < 12 {
 		return 6
 	}
-	return m.height - headerLines - 3
+	return m.height - headerLines - 2
 }
 
 func blank(lines int) string {

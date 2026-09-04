@@ -271,3 +271,33 @@ func TestAWordBesideTheLineIsNotPartOfTheTab(t *testing.T) {
 		}
 	}
 }
+
+func TestATechniqueIsReadOntoTheNoteItLeadsTo(t *testing.T) {
+	// 5h7 is a hammer on to the 7, 9/12 a slide into the 12, and the 3 is bent
+	// up to the 5. the letter says how the note after it is reached, which is
+	// the note it belongs to. the 7~ trails the note before it instead
+	riff := `
+e|------------------------------|
+B|------------------------------|
+G|------------------------------|
+D|------------------------------|
+A|------------------------------|
+E|---5h7---9/12---3b5---7~------|
+`
+
+	parsed, err := ParseASCII(riff, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []Technique{"", Hammer, "", Slide, "", Bend, Vibrato}
+	if len(parsed.Notes) != len(want) {
+		t.Fatalf("want %d notes, got %d", len(want), len(parsed.Notes))
+	}
+	for index, one := range want {
+		if got := parsed.Notes[index].Technique; got != one {
+			t.Fatalf("note %d on fret %d is %q, want %q",
+				index, parsed.Notes[index].Fret, got, one)
+		}
+	}
+}
