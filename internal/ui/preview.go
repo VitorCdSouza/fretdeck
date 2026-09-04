@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/VitorCdSouza/fretdeck/internal/ultimate"
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
 // The bottom of the search column. A song there has a dozen
@@ -26,14 +26,14 @@ const rest = 350 * time.Millisecond
 // page is one transcription that has been read, or the reason it could not be.
 // An entry with neither is one that is on its way.
 type page struct {
-	tab  *ultimate.Tab
+	tab  *tabsite.Tab
 	fail string
 }
 
 // pageMsg is a page that has come back.
 type pageMsg struct {
 	url string
-	tab *ultimate.Tab
+	tab *tabsite.Tab
 	err error
 }
 
@@ -78,7 +78,7 @@ func (m *Model) previewOf() (finding, bool) {
 	}
 
 	item := m.results[m.found]
-	if item.URL == "" || item.Have() || !ultimate.Playable(item.Kind) && item.Kind != "" {
+	if item.URL == "" || item.Have() || !tabsite.Playable(item.Kind) && item.Kind != "" {
 		return finding{}, false
 	}
 
@@ -86,7 +86,7 @@ func (m *Model) previewOf() (finding, bool) {
 }
 
 func (m *Model) readPage(address string) tea.Cmd {
-	client := m.ultimate
+	client := siteOf(address, m.site)
 	return func() tea.Msg {
 		tab, err := client.Fetch(context.Background(), address)
 		return pageMsg{url: address, tab: tab, err: err}

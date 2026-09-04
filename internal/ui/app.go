@@ -18,7 +18,7 @@ import (
 	"github.com/VitorCdSouza/fretdeck/internal/practice"
 	"github.com/VitorCdSouza/fretdeck/internal/song"
 	"github.com/VitorCdSouza/fretdeck/internal/songsterr"
-	"github.com/VitorCdSouza/fretdeck/internal/ultimate"
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
 type screen int
@@ -120,23 +120,13 @@ type Model struct {
 
 	engine *practice.Engine
 	tab    *song.Tab
-	heard  notePayload
 
-	// highway is the guitar hero view of the same song. It is a way of
-	// drawing what the engine already knows, not a mode of its own
-	highway bool
-
-	// counting is the beat the sound side was last told to click. The command
-	// only goes down the pipe when the answer changes, since what it is worked
-	// out from is read twenty five times a second
-	counting counting
-
-	// the music screen, over ultimate guitar and over what was played, with
+	// the music screen, over a tab site and over what was played, with
 	// songsterr answering for the difficulty beside a row
 	// it is two lists side by side: kept is what was played, down the left, and
 	// results is what the search answered. focus is the column the keys are on
 	songsterr *songsterr.Client
-	ultimate  *ultimate.Client
+	site      tabsite.Site
 	query     string
 	kept      []finding
 	keptRow   int
@@ -202,7 +192,6 @@ type asking int
 const (
 	askingNothing asking = iota
 	askingQuery
-	askingBpm
 )
 
 // firstRun is what the config screen still has to ask. The two questions are asked in
@@ -214,13 +203,6 @@ const (
 	firstRunInstrument
 	firstRunInput
 )
-
-// counting is what the metronome was last asked for. A zero beat is the click
-// turned off, which is what leaving the practice screen looks like from here.
-type counting struct {
-	bpm   float64
-	beats int
-}
 
 // Options is what the command line can say. It is there so the app can be
 // opened on a song, or on an input, without walking the screens to get there
@@ -260,7 +242,7 @@ func NewWith(options Options) *Model {
 		events:    make(chan bridge.Event, 256),
 		lookups:   make(chan lookupMsg, 256),
 		songsterr: songsterr.New(),
-		ultimate:  ultimate.New(),
+		site:      openSite(cfg.Site),
 		input:     input,
 		first:     first,
 		screen:    opening,
@@ -370,27 +352,6 @@ func (m *Model) askDevices() tea.Cmd {
 	return tea.Tick(6*time.Second, func(time.Time) tea.Msg { return lateMsg{} })
 }
 
-// count tells the sound side what to click, and says nothing when that is what
-// it is already clicking. The click is the practice screen's: it counts a song
-// that is open and nothing else, so walking away from one turns it off.
-func (m *Model) count(now time.Time) tea.Cmd {
-	want := counting{}
-	if m.engine != nil && m.engine.ClickOn() && m.screen == screenPractice {
-		want.bpm, want.beats = m.engine.Click(now)
-	}
-	if want == m.counting {
-		return nil
-	}
-	m.counting = want
-
-	command := bridge.Command{Action: "click", Bpm: want.bpm, Beats: want.beats}
-	worker := m.worker
-	return func() tea.Msg {
-		_ = worker.Send(command)
-		return nil
-	}
-}
-
 func (m *Model) listen() tea.Cmd {
 	command := bridge.Command{
 		Action: "listen",
@@ -415,12 +376,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case frameMsg:
-		if m.engine != nil {
-			m.engine.Tick(time.Time(msg))
-		}
-		// the beat is worked out here and not at every key that can change it:
-		// a song changes tempo halfway through and nobody pressed anything
-		return m, tea.Batch(tick(), m.resting(time.Time(msg)), m.count(time.Time(msg)))
+		return m, tea.Batch(tick(), m.resting(time.Time(msg)))
 
 	case songsMsg:
 		m.songs = msg
@@ -443,7 +399,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fail = msg.text
 		return m, nil
 
-	case ultimateMsg:
+	case searchMsg:
 		m.seeking = false
 		if msg.err != nil {
 			m.fail = msg.err.Error()
@@ -569,12 +525,6 @@ func (m *Model) handle(event bridge.Event) tea.Cmd {
 		// happening and not what went wrong
 		m.status = event.Message
 
-	case bridge.EventClickError:
-		// the click could not be played, which is not the listening failing.
-		// the count stays on the screen and the song goes on
-		m.counting = counting{}
-		m.fail = "the click could not be played: " + event.Message
-
 	case bridge.EventListenError, bridge.EventError, bridge.EventAudioWarning:
 		m.listing = false
 		m.fail = event.Message
@@ -627,16 +577,12 @@ func (m *Model) handle(event bridge.Event) tea.Cmd {
 // onNote is the whole point of the app: a pitch came in and the practice
 // screen has to answer for it.
 func (m *Model) onNote(note notePayload) {
-	m.heard = note
 	m.silence = time.Now()
 
 	if m.engine == nil || m.screen != screenPractice {
 		return
 	}
-	if m.engine.Mode == practice.Tempo && !m.engine.Running() {
-		return
-	}
-	m.engine.Heard(note.Midi, time.Now())
+	m.engine.Heard(note.Midi)
 }
 
 // chosen is whether a row of the list is the input that was kept. A name is
@@ -925,10 +871,25 @@ func (m *Model) footer() string {
 		return rule(m.width) + "\n" + styleBad.Render(truncate(m.fail, m.width))
 	}
 
+	// the question a removal asks takes the line over, since a file is the one
+	// copy of a tab and nothing else on the bar is worth reading while it is on
+	if m.removing {
+		ask := styleWarn.Render("remove "+m.doomed.Title+"?") + chipGap +
+			chip(binding{keys: "y", what: "remove it"}) + chipGap +
+			chip(binding{keys: "n", what: "keep it"})
+		return rule(m.width) + "\n" + truncate(ask, m.width)
+	}
+
 	keys := chip(binding{keys: "?", what: "keys"})
+	for _, item := range m.rowActions() {
+		keys += chipGap + chip(item)
+	}
 
 	return rule(m.width) + "\n" + truncate(pad(keys, m.hearing(), m.width), m.width)
 }
+
+// chipGap is what stands between one chip of the bar and the next
+const chipGap = "   "
 
 // hearing is the input and the note coming in on it, in the corner furthest
 // from the tab, since it is read while nothing else is.

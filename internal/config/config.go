@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
 // Config is what survives between runs. It lives in os.UserConfigDir, out of
@@ -33,21 +35,10 @@ type Config struct {
 	// Library is where the imported songs live
 	Library string `json:"library"`
 
-	// Speed is the tempo multiplier the practice screen opens with
-	Speed float64 `json:"speed"`
-
-	// Bpm is the beat the metronome opens on. It is only used where the song
-	// has no tempo of its own to take one from, since a song that has one
-	// scales that instead and the two would otherwise disagree
-	Bpm float64 `json:"bpm"`
-
-	// Click says whether the metronome is heard as well as seen. It is off
-	// unless it was turned on: the input is open while it counts
-	Click bool `json:"click"`
-
-	// Level is how much of a transcription to ask for, by the name the song
-	// package gives it. An empty one is the bottom of the ladder
-	Level string `json:"level"`
+	// Site is where a search reads its tabs from, by the name the tabsite
+	// package keeps them under. There is more than one and they do not answer
+	// alike, so which one is being read is an answer worth keeping
+	Site string `json:"site"`
 
 	// Mouse says whether the app asks the terminal for mouse events. It is on
 	// unless it was turned off, and turning it off gives text selection back
@@ -93,9 +84,7 @@ func defaults() Config {
 		Device:  -1,
 		Rate:    44100,
 		Library: library,
-		Speed:   1,
-		Bpm:     120,
-		Level:   "full",
+		Site:    tabsite.Ultimate,
 		Mouse:   true,
 	}
 }
@@ -119,17 +108,12 @@ func Load() Config {
 	if loaded.Rate <= 0 {
 		loaded.Rate = 44100
 	}
-	if loaded.Speed <= 0 {
-		loaded.Speed = 1
-	}
-	if loaded.Bpm <= 0 {
-		loaded.Bpm = defaults().Bpm
-	}
-	if loaded.Level == "" {
-		loaded.Level = defaults().Level
-	}
 	if loaded.Library == "" {
 		loaded.Library = defaults().Library
+	}
+	// a config is a file and a file can name a site that is not read here
+	if !tabsite.Known(loaded.Site) {
+		loaded.Site = defaults().Site
 	}
 	return loaded
 }

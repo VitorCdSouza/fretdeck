@@ -11,14 +11,55 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/VitorCdSouza/fretdeck/internal/cifraclub"
 	"github.com/VitorCdSouza/fretdeck/internal/config"
 	"github.com/VitorCdSouza/fretdeck/internal/song"
 	"github.com/VitorCdSouza/fretdeck/internal/songsterr"
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 	"github.com/VitorCdSouza/fretdeck/internal/ultimate"
 )
 
+// openSite is the one place a site is built, so a name out of the config is
+// the only thing the rest of the app knows about where a song comes from. A
+// name nobody recognises reads ultimate guitar, which is what a config with
+// nothing in it means.
+func openSite(name string) tabsite.Site {
+	if name == tabsite.Cifra {
+		return cifraclub.New()
+	}
+	return ultimate.New()
+}
+
+// siteOf is the site a page is read by, which is the one it came from and not
+// whichever the config names now: the recent list keeps addresses from before
+// the site was last changed, and neither site can read the other's page. What
+// is not one of theirs is read by the site in force, since that is where it
+// was found.
+func siteOf(address string, chosen tabsite.Site) tabsite.Site {
+	switch siteName(address) {
+	case tabsite.Cifra:
+		return cifraclub.New()
+	case tabsite.Ultimate:
+		return ultimate.New()
+	}
+	return chosen
+}
+
+// siteName is the site an address belongs to, by the host in it. A song with
+// no page of its own belongs to none, which is what an empty name says.
+func siteName(address string) string {
+	switch {
+	case strings.Contains(address, "cifraclub."):
+		return tabsite.Cifra
+	case strings.Contains(address, "ultimate-guitar."):
+		return tabsite.Ultimate
+	}
+	return ""
+}
+
 // The one way in. Every song comes through here: the search reads tabs off
-// ultimate guitar, and beside it, down the left, is what has been played,
+// whichever site the config names, and beside it, down the left, is what has
+// been played,
 // which is the way back to whatever was being worked on.
 //
 // The two are columns of the one screen and both are drawn the whole time, so
@@ -35,7 +76,7 @@ type source int
 
 const (
 	sourceRecent source = iota
-	sourceUltimate
+	sourceSearch
 	sourceTracks
 )
 
@@ -71,7 +112,7 @@ type finding struct {
 	URL  string
 	Path string
 
-	// Kind, Version, Rating and Votes are what an ultimate guitar row carries.
+	// Kind, Version, Rating and Votes are what a rated site's row carries.
 	// Played is what a row of the recent list carries instead
 	Kind    string
 	Version int
@@ -117,10 +158,10 @@ const (
 	lookupMissing
 )
 
-// ultimateMsg is a search, and grabMsg is one of its tabs read and written
+// searchMsg is a search, and grabMsg is one of its tabs read and written
 // into the library, which is the whole of that trip.
-type ultimateMsg struct {
-	results []ultimate.Result
+type searchMsg struct {
+	results []tabsite.Result
 	err     error
 }
 
@@ -143,21 +184,21 @@ type lookupMsg struct {
 	found bool
 }
 
-func (m *Model) searchUltimate(pattern string) tea.Cmd {
-	client := m.ultimate
+func (m *Model) searchSite(pattern string) tea.Cmd {
+	client := m.site
 	return func() tea.Msg {
 		results, err := client.Search(context.Background(), pattern)
-		return ultimateMsg{results: results, err: err}
+		return searchMsg{results: results, err: err}
 	}
 }
 
-// showTabs turns an ultimate guitar answer into rows: one per song, with the
+// showTabs turns what a site answered into rows: one per song, with the
 // versions of it held aside until the row is opened. A search there answers a
 // dozen transcriptions of the one song and a list of twenty rows for three
 // songs is a list nobody reads. What cannot be read stays on the list rather
 // than disappearing, since knowing a song is only up as chords is worth the
 // line it takes.
-func (m *Model) showTabs(results []ultimate.Result) {
+func (m *Model) showTabs(results []tabsite.Result) {
 	m.results = nil
 	m.groups = map[string][]finding{}
 
@@ -166,7 +207,7 @@ func (m *Model) showTabs(results []ultimate.Result) {
 	var order []string
 	for _, item := range results {
 		row := finding{
-			From:    sourceUltimate,
+			From:    sourceSearch,
 			Artist:  item.Artist,
 			Title:   item.Title,
 			Key:     songsterr.Key(item.Artist, item.Title),
@@ -208,7 +249,7 @@ func (m *Model) showTabs(results []ultimate.Result) {
 // groupOf is what tells one song from another on that list. The instrument is
 // part of it: a bass transcription is not a version of the guitar one, it is
 // somebody else's part, and a chord sheet is neither.
-func groupOf(item ultimate.Result) string {
+func groupOf(item tabsite.Result) string {
 	return songsterr.Key(item.Artist, item.Title) + " " + item.Kind
 }
 
@@ -261,14 +302,14 @@ func (m *Model) collapse(index int) {
 
 	m.results[index].Open = false
 	m.results = append(m.results[:index+1], m.results[end:]...)
-	m.found = clamp(index, len(m.results))
+	m.found = clampFound(index, len(m.results))
 }
 
 // heading is the group row the cursor is on or under, and whether there is one
 // at all: a version sits directly beneath the row it was opened out of, and a
 // song with a single version is a group of nobody.
 func (m *Model) heading() (int, bool) {
-	if m.found >= len(m.results) {
+	if m.found < 0 || m.found >= len(m.results) {
 		return 0, false
 	}
 
@@ -293,9 +334,9 @@ func (m *Model) heading() (int, bool) {
 // The site answers a guitar tab and a bass tab of the same song in one list,
 // and the other one is somebody else's part.
 func (m *Model) sortByInstrument() {
-	want := ultimate.KindTab
+	want := tabsite.KindTab
 	if m.instrument().Bass {
-		want = ultimate.KindBass
+		want = tabsite.KindBass
 	}
 
 	sort.SliceStable(m.results, func(i, j int) bool {
@@ -338,7 +379,7 @@ func (m *Model) musicCursor() int {
 	if m.focus == paneRecent {
 		return m.keptRow
 	}
-	return m.found
+	return clampFound(m.found, len(m.results))
 }
 
 func (m *Model) setMusicCursor(row int) {
@@ -346,8 +387,24 @@ func (m *Model) setMusicCursor(row int) {
 		m.keptRow = clamp(row, len(m.kept))
 		return
 	}
-	m.found = clamp(row, len(m.results))
+	m.found = clampFound(row, len(m.results))
 }
+
+// clampFound is the cursor of the search column, which has the field above its
+// rows: fieldRow is where k off the top of the list lands, and it is where a
+// search that answered nothing leaves the cursor.
+func clampFound(row, length int) int {
+	if row < fieldRow {
+		return fieldRow
+	}
+	if row >= length {
+		return length - 1
+	}
+	return row
+}
+
+// fieldRow is the row the search field is drawn on, above the first result.
+const fieldRow = -1
 
 // onDisk is where the song of an entry is, and nothing when the file has gone.
 func (m *Model) onDisk(entry config.Entry) string {
@@ -483,17 +540,18 @@ func (m *Model) grab(item finding) tea.Cmd {
 		return nil
 	}
 	// a recent row carries no kind, and the page it names was read in already
-	if item.Kind != "" && !ultimate.Playable(item.Kind) {
+	if item.Kind != "" && !tabsite.Playable(item.Kind) {
 		m.fail = strings.ToLower(item.Kind) + " has no frets in it to read, only a tab does"
 		return nil
 	}
 
-	client, dir, address := m.ultimate, m.cfg.Library, item.URL
+	dir, address := m.cfg.Library, item.URL
+	client := siteOf(address, m.site)
 	m.seeking = true
 	m.status = "reading " + item.Title
 
 	// the preview has usually read the page already, and it is the same page
-	var known *ultimate.Tab
+	var known *tabsite.Tab
 	if held := m.pages[address]; held != nil {
 		known = held.tab
 	}
@@ -516,9 +574,13 @@ func (m *Model) grab(item finding) tea.Cmd {
 		}
 
 		parsed.Artist = tab.Artist
-		parsed.Track = fmt.Sprintf("version %d", tab.Version)
 
-		name := fmt.Sprintf("%s %s v%d", tab.Artist, tab.Title, tab.Version)
+		// a site with one transcription a song numbers none of them
+		name := fmt.Sprintf("%s %s", tab.Artist, tab.Title)
+		if tab.Version > 0 {
+			parsed.Track = fmt.Sprintf("version %d", tab.Version)
+			name = fmt.Sprintf("%s v%d", name, tab.Version)
+		}
 		path, err := song.WriteAs(dir, parsed, name)
 		if err != nil {
 			return grabMsg{err: err}
@@ -595,7 +657,7 @@ func (m *Model) songAt(path string) *song.Song {
 // without a word, because forgetting a line costs nothing.
 func (m *Model) remove() tea.Cmd {
 	items, row := m.musicRows(), m.musicCursor()
-	if row >= len(items) {
+	if row < 0 || row >= len(items) {
 		return nil
 	}
 
@@ -667,7 +729,7 @@ func (m *Model) keySearch(key string) tea.Cmd {
 	// the field is on the screen already, and i is what puts the cursor in it
 	case "i":
 		m.focus = paneSearch
-		return m.ask(askingQuery, "artist and song, on ultimate guitar", m.query)
+		return m.ask(askingQuery, "artist and song, on "+m.cfg.Site, m.query)
 
 	case "enter":
 		return m.enterSearch()
@@ -702,7 +764,7 @@ func (m *Model) keySearch(key string) tea.Cmd {
 		if key == "esc" {
 			m.query = ""
 			m.results = nil
-			m.found = 0
+			m.found = fieldRow
 		}
 	}
 
@@ -714,7 +776,10 @@ func (m *Model) keySearch(key string) tea.Cmd {
 // not l, since it is the key that ends up starting a take.
 func (m *Model) enterSearch() tea.Cmd {
 	items, row := m.musicRows(), m.musicCursor()
-	if row >= len(items) {
+	if row == fieldRow {
+		return m.ask(askingQuery, "artist and song, on "+m.cfg.Site, m.query)
+	}
+	if row < 0 || row >= len(items) {
 		return nil
 	}
 
@@ -723,7 +788,7 @@ func (m *Model) enterSearch() tea.Cmd {
 	// a song with more than one transcription of it opens into them first:
 	// which version to read is a question and enter is what answers one. What
 	// has no frets in it opens into nothing, since none of them can be read
-	if item.heads() && ultimate.Playable(item.Kind) {
+	if item.heads() && tabsite.Playable(item.Kind) {
 		m.expand(row)
 		return nil
 	}
@@ -734,23 +799,24 @@ func (m *Model) enterSearch() tea.Cmd {
 
 	// a row with no page of its own is one that was played and then removed
 	if item.URL == "" {
-		return m.askUltimate(item.Artist + " " + item.Title)
+		return m.askSite(item.Artist + " " + item.Title)
 	}
 
 	return m.grab(item)
 }
 
-// askUltimate is the search itself, which is also what enter on a row with no
-// page of its own falls back to.
-func (m *Model) askUltimate(pattern string) tea.Cmd {
+// askSite is the search itself, which is also what enter on a row with no
+// page of its own falls back to. Which site it goes to is the config's, and
+// nothing here asks anything else about it.
+func (m *Model) askSite(pattern string) tea.Cmd {
 	m.query = pattern
 	m.focus = paneSearch
 	m.results = nil
-	m.found = 0
+	m.found = fieldRow
 	m.seeking = true
-	m.status = "searching ultimate guitar for " + pattern
+	m.status = "searching " + m.cfg.Site + " for " + pattern
 
-	return m.searchUltimate(pattern)
+	return m.searchSite(pattern)
 }
 
 // viewSearch is the two columns: what was played down the left and the search
@@ -806,10 +872,6 @@ func (m *Model) recentColumn(width, room int) []string {
 	width--
 	lines := []string{"", columnHead("RECENTLY PLAYED", plural(len(m.kept), "song"), width), ""}
 
-	if len(m.kept) == 0 {
-		return append(lines, wrapped("What you read in shows up here, so this column is the way back to it.", width)...)
-	}
-
 	start, end := window(m.keptRow, len(m.kept), (room-len(lines))/keptLines)
 	m.clicks = append(m.clicks, clickable{top: headerLines + len(lines), first: start,
 		count: end - start, width: width, step: keptLines, side: paneRecent})
@@ -842,12 +904,20 @@ func (m *Model) recentRow(item finding, selected bool, width int) []string {
 		said = "not here"
 	}
 
+	// the site the tab was read off, since a song is on this list whichever
+	// one answered for it and neither can read the other's page
+	tag, room := "", 3
+	if letters := tabsite.TagOf(siteName(item.URL)); letters != "" {
+		tag = paint.of(styleSubtle).Render(letters) + " "
+		room += len(letters) + 1
+	}
+
 	head := mark + " " + paint.of(title).Render(item.Title)
-	under := "   " + paint.of(styleFaint).Render(item.Artist)
+	under := "   " + tag + paint.of(styleFaint).Render(item.Artist)
 
 	return []string{
 		paint.fill(truncate(head, width), width),
-		paint.pad(truncate(under, width-len(said)-3),
+		paint.pad(truncate(under, width-len(said)-room),
 			paint.of(styleFaint).Render(said+" "), width),
 	}
 }
@@ -858,45 +928,20 @@ func (m *Model) searchColumn(width, room int) []string {
 	lead := m.searchBox(width)
 
 	if m.seeking && len(m.results) == 0 {
-		return m.spinnerLines(lead, "searching ultimate guitar")
+		return m.spinnerLines(lead, "searching "+m.cfg.Site)
 	}
 
+	// a search that answered nothing says so, and a field nobody has typed in
+	// yet says nothing at all: the placeholder on it is the whole of it
 	if len(m.results) == 0 {
-		return append(lead, m.searchHelp(width)...)
+		if m.query == "" {
+			return lead
+		}
+		return append(lead, "  "+styleSubtle.Render("Nothing came back for that."))
 	}
 
 	return m.listColumn(lead, "RESULTS", plural(songsIn(m.results), "song"),
 		m.results, m.found, width, room, paneSearch)
-}
-
-// searchHelp is that column with nothing searched yet. A field nobody has
-// typed in is a screen with no answer on it, so it says what the search
-// reaches and what enter on a row does.
-func (m *Model) searchHelp(width int) []string {
-	var lines []string
-
-	for _, text := range []string{
-		"Press i and type an artist and a song.",
-		"Ultimate Guitar answers with every version of it people have written, and the text of the tab is in the page, so enter on one reads it into the library without leaving here.",
-		"Songsterr says how hard it is, and the spotify screen reads a playlist of yours the same way, sorted from easiest to hardest.",
-	} {
-		lines = append(lines, wrapped(text, width)...)
-		lines = append(lines, "")
-	}
-
-	return lines
-}
-
-// wrapped is a paragraph broken to the column it is drawn in, since a line
-// written for the whole window runs off the side of one.
-func wrapped(text string, width int) []string {
-	block := styleSubtle.Width(width - 4).Render(text)
-
-	var lines []string
-	for _, line := range strings.Split(block, "\n") {
-		lines = append(lines, "  "+line)
-	}
-	return lines
 }
 
 // searchBox is the top of the right column. The field is on the screen whether
@@ -920,12 +965,38 @@ func (m *Model) searchField() string {
 	if m.input.Focused() {
 		return caret + m.input.View()
 	}
-	if m.query == "" {
-		return caret + styleFaint.Render("  press i and type an artist and a song")
+
+	// a cursor blinking on the field says the next key typed goes into it
+	lead := "  "
+	if m.onField() {
+		lead = "  " + blinkCell()
 	}
 
-	return caret + styleSubtle.Render("  "+m.query)
+	if m.query == "" {
+		return caret + lead + styleFaint.Render("press i and type an artist and a song")
+	}
+
+	return caret + lead + styleSubtle.Render(m.query)
 }
+
+// onField is the search column with the cursor above its rows, which is the
+// field itself.
+func (m *Model) onField() bool {
+	return m.screen == screenMusic && m.focus == paneSearch &&
+		clampFound(m.found, len(m.results)) == fieldRow
+}
+
+// blinkCell is the cursor of a field nobody is typing in yet. The view is
+// redrawn every frame, so the clock is the whole of the blink.
+func blinkCell() string {
+	if time.Now().UnixMilli()/blinkRate%2 == 0 {
+		return styleAccent.Render("█")
+	}
+	return " "
+}
+
+// blinkRate is how long the cursor is on, and then off, in milliseconds
+const blinkRate = 500
 
 // spinnerLines is the column while something is being waited for. The lead is
 // whatever is drawn above it, since the music screen keeps its search field on
@@ -1043,9 +1114,9 @@ func (m *Model) nameOf(item finding, paint rowPaint, selected bool) string {
 	// the two cells it takes are kept on every row of the list so a song with
 	// one transcription of it stands in the same column as the rest
 	open := ""
-	if item.From == sourceUltimate {
+	if item.From == sourceSearch {
 		open = paint.of(styleFaint).Render("  ")
-		if item.heads() && ultimate.Playable(item.Kind) {
+		if item.heads() && tabsite.Playable(item.Kind) {
 			if item.Open {
 				open = paint.of(styleAccent).Render("▾ ")
 			} else {
@@ -1073,7 +1144,7 @@ func (m *Model) rightOf(item finding, paint rowPaint) string {
 // saidAbout draws what is known about a row. A recent one says when it was played,
 // which is what that list is sorted by and the only question it answers.
 func (m *Model) saidAbout(item finding, paint rowPaint) string {
-	if item.Kind != "" && !ultimate.Playable(item.Kind) {
+	if item.Kind != "" && !tabsite.Playable(item.Kind) {
 		return paint.of(styleFaint).Render(strings.ToLower(item.Kind))
 	}
 
@@ -1135,7 +1206,7 @@ func (m *Model) versionOf(item finding, paint rowPaint) string {
 		written = paint.of(styleSubtle).Render(plural(item.Count, "version"))
 	}
 
-	if (item.Kind == ultimate.KindBass) != m.instrument().Bass {
+	if (item.Kind == tabsite.KindBass) != m.instrument().Bass {
 		instrument := paint.of(styleSubtle).Render(played(item.Kind))
 		if written != "" {
 			instrument += paint.of(styleFaint).Render("  ")
@@ -1166,7 +1237,7 @@ func (m *Model) versionOf(item finding, paint rowPaint) string {
 
 // played is the instrument a kind of tab is for, in the one word that says it.
 func played(kind string) string {
-	if kind == ultimate.KindBass {
+	if kind == tabsite.KindBass {
 		return "bass"
 	}
 	return "guitar"

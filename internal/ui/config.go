@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/VitorCdSouza/fretdeck/internal/song"
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
 // The config screen asks the two things the app cannot work out on its own:
@@ -42,7 +43,7 @@ func (m *Model) configCount() int {
 		count += len(m.devices)
 	}
 	if m.first == firstRunDone {
-		count++
+		count += len(tabsite.Sites) + 1
 	}
 	return count
 }
@@ -54,6 +55,7 @@ const (
 	configNothing configKind = iota
 	configInstrument
 	configInput
+	configSite
 	configMouse
 )
 
@@ -75,8 +77,13 @@ func (m *Model) configPick() (configKind, int) {
 		}
 		row -= len(m.devices)
 	}
-	if m.first == firstRunDone && row == 0 {
-		return configMouse, 0
+	if m.first == firstRunDone {
+		if row < len(tabsite.Sites) {
+			return configSite, row
+		}
+		if row-len(tabsite.Sites) == 0 {
+			return configMouse, 0
+		}
 	}
 
 	return configNothing, 0
@@ -184,6 +191,24 @@ func (m *Model) keepConfig() tea.Cmd {
 		}
 		return m.listen()
 
+	case configSite:
+		chosen := tabsite.Sites[at]
+		m.cfg.Site = chosen.Name
+		if err := m.cfg.Save(); err != nil {
+			m.fail = err.Error()
+			return nil
+		}
+		m.site = openSite(chosen.Name)
+		m.status = "songs come from " + chosen.Name
+
+		// the rows of the site that was left are pages this one cannot read
+		m.results, m.groups, m.pages = nil, nil, nil
+		m.found = 0
+		if m.query != "" {
+			return m.askSite(m.query)
+		}
+		return nil
+
 	case configMouse:
 		m.cfg.Mouse = !m.cfg.Mouse
 		if err := m.cfg.Save(); err != nil {
@@ -241,6 +266,9 @@ func (m *Model) viewConfig() string {
 		tail := 3
 		if m.first == firstRunInput {
 			tail = 7
+		} else {
+			// the site list is under the inputs and the switch is under that
+			tail += 3 + len(tabsite.Sites)
 		}
 		lines = append(lines, m.deviceRows(headerLines+len(lines), m.space()-len(lines)-tail)...)
 
@@ -256,6 +284,13 @@ func (m *Model) viewConfig() string {
 	}
 
 	if m.first == firstRunDone {
+		lines = append(lines, "", m.sectionHead("THE TAB SITE", m.cfg.Site), "")
+		m.clicks = append(m.clicks, clickable{top: headerLines + len(lines),
+			first: m.configCount() - len(tabsite.Sites) - 1, count: len(tabsite.Sites)})
+		for index, item := range tabsite.Sites {
+			lines = append(lines, m.siteRow(item, index))
+		}
+
 		lines = append(lines, "", m.sectionHead("THE MOUSE", ""), "")
 		m.clicks = append(m.clicks, clickable{top: headerLines + len(lines),
 			first: m.configCount() - 1, count: 1})
@@ -327,6 +362,28 @@ func (m *Model) deviceRow(device deviceInfo, selected bool) string {
 	note := paint.of(styleFaint).Render(fmt.Sprintf("%s · %d ch · %d Hz", device.Host, device.Channels, device.Rate))
 	if m.chosen(device) {
 		note = paint.of(styleOk).Render("in use") + paint.of(styleFaint).Render("   "+note)
+	}
+
+	return paint.pad(mark+name, note+paint.of(styleFaint).Render(" "), m.width)
+}
+
+// siteRow is one of the places a search reads from. The two do not answer
+// alike, which is what the note beside a name is for: one has a dozen rated
+// versions of a song and the other has one, in another language.
+func (m *Model) siteRow(item tabsite.Info, index int) string {
+	kind, at := m.configPick()
+	selected := kind == configSite && at == index
+
+	paint := rowPaint(selected)
+
+	mark, name := "   ", paint.of(styleInk).Render(item.Name)
+	if selected {
+		mark, name = paint.of(styleAccent).Render(" ▎ "), paint.of(styleHeading).Render(item.Name)
+	}
+
+	note := paint.of(styleFaint).Render(item.Note)
+	if item.Name == m.cfg.Site {
+		note = paint.of(styleOk).Render("reading") + paint.of(styleFaint).Render("   "+item.Note)
 	}
 
 	return paint.pad(mark+name, note+paint.of(styleFaint).Render(" "), m.width)

@@ -130,21 +130,9 @@ func (s *Song) Label(number int) string {
 // Events groups the notes by attack. Notes closer than a thirty second note at
 // 200 bpm are the same strum, and no tab writes two columns for that.
 func (s *Song) Events() []Event {
-	return s.EventsAt(Full)
-}
-
-// EventsAt is the same grouping with the techniques the level does not reach
-// taken off. The note stays where it is and keeps its pitch: what a level
-// below a bend drops is the asking for the bend, so it is played as the fret
-// it is written on and the tab stops drawing the letter.
-func (s *Song) EventsAt(level Level) []Event {
 	var events []Event
 
 	for _, note := range s.Notes {
-		if note.Technique.Level() > level {
-			note.Technique = ""
-		}
-
 		if n := len(events); n > 0 && math.Abs(note.Time-events[n-1].Time) < 0.02 {
 			events[n-1].Notes = append(events[n-1].Notes, note)
 			continue
@@ -158,39 +146,6 @@ func (s *Song) EventsAt(level Level) []Event {
 	}
 
 	return events
-}
-
-// BeatAt turns a moment into a position in quarter notes.
-//
-// It is not one multiplication: a song may change tempo, so the answer is read
-// off the measure the moment falls in and counted from there.
-func (s *Song) BeatAt(seconds float64) float64 {
-	tempo, start, beat := s.Tempo, 0.0, 0.0
-	for _, measure := range s.Measures {
-		if measure.Time > seconds {
-			break
-		}
-		tempo, start, beat = measure.Tempo, measure.Time, measure.Beat
-	}
-
-	if tempo <= 0 {
-		tempo = 120
-	}
-
-	return beat + (seconds-start)*tempo/60.0
-}
-
-// MeasureAt is the measure a moment falls in, and the beat that measure starts
-// on, which is what a bar line needs to draw itself.
-func (s *Song) MeasureAt(seconds float64) Measure {
-	found := Measure{Index: 1, Signature: [2]int{4, 4}, Tempo: s.Tempo}
-	for _, measure := range s.Measures {
-		if measure.Time > seconds {
-			break
-		}
-		found = measure
-	}
-	return found
 }
 
 // Duration is where the last note stops ringing.

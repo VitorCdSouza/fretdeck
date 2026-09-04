@@ -1,31 +1,10 @@
 package practice
 
 import (
-	"math"
 	"sort"
-	"time"
 
 	"github.com/VitorCdSouza/fretdeck/internal/song"
 )
-
-type Mode int
-
-const (
-	// Wait holds the cursor on a note until it is played right. There is no
-	// clock, which is what learning a passage actually looks like
-	Wait Mode = iota
-
-	// Tempo runs the song at its own speed and judges every note against the
-	// instant it was written for
-	Tempo
-)
-
-func (m Mode) String() string {
-	if m == Wait {
-		return "wait"
-	}
-	return "tempo"
-}
 
 type Verdict int
 
@@ -33,178 +12,72 @@ const (
 	Pending Verdict = iota
 	Hit
 	Wrong
-	Missed
 )
 
 // Result is what happened to one event of the song.
 type Result struct {
 	Verdict Verdict
 	Played  int
-	Offset  time.Duration
 }
-
-// Score is the line at the bottom of the practice screen.
-type Score struct {
-	Total     int
-	Hits      int
-	Wrongs    int
-	Missed    int
-	Accuracy  float64
-	AvgOffset time.Duration
-}
-
-// window is how far from its written instant a note still counts in tempo
-// mode. A hundred and fifty milliseconds is about where a listener starts to
-// hear a note as late rather than as part of the beat.
-const window = 150 * time.Millisecond
-
-// countIn is the silence before the clock starts, so nobody is judged on a
-// note they were supposed to play before the screen finished drawing.
-const countIn = 2 * time.Second
 
 // Engine walks a song one event at a time and judges what it hears.
 //
-// It owns no audio and no clock of its own: the caller feeds it notes and the
-// current time. That is what lets the whole of it be tested without a guitar.
+// It owns no audio and no clock: the caller hands it the notes. The cursor
+// holds on an event until it is played right, which is what learning a passage
+// actually looks like, and it is the keys that move it anywhere else.
 type Engine struct {
 	Song   *song.Song
 	Events []song.Event
-	Mode   Mode
 
-	// Speed multiplies the tempo, so a passage can be run slower than written.
-	// SetSpeed is what keeps it inside its ends, and asking for a beat in bpm
-	// goes through the same field
-	Speed float64
-
-	results  []Result
-	cursor   int
-	origin   time.Time
-	running  bool
-	offsets  []time.Duration
-	detected int
+	results []Result
+	cursor  int
 
 	// repeat is the measures that were picked to be looped over. A song with
 	// none of them runs to the end, which is every song until somebody asks
 	repeat map[int]bool
 	passes int
-
-	// level is how much of the transcription the song is asking for. It takes
-	// nothing off the notes and only off what is written on them, so the
-	// cursor and every verdict already given still stand where they were
-	level song.Level
-
-	// the metronome, which is the one clock here that is not the song's
-	click     bool
-	clickBpm  float64
-	clickFrom time.Time
 }
 
-// defaultBpm is what the click counts for a song that carries no tempo of its
-// own. It is the beat every metronome on earth opens on.
-const defaultBpm = 120.0
-
-// The ends of the speed. Under a quarter of what was written the notes stop
-// being a phrase, and over twice it the song is not the one on the page.
-const (
-	MinSpeed = 0.25
-	MaxSpeed = 2.0
-)
-
-func New(s *song.Song, mode Mode) *Engine {
-	events := s.EventsAt(song.Full)
+func New(s *song.Song) *Engine {
+	events := s.Events()
 	return &Engine{
-		Song:     s,
-		Events:   events,
-		Mode:     mode,
-		Speed:    1,
-		level:    song.Full,
-		clickBpm: defaultBpm,
-		results:  make([]Result, len(events)),
+		Song:    s,
+		Events:  events,
+		results: make([]Result, len(events)),
 	}
-}
-
-// Level is how much of the transcription is being asked for.
-func (e *Engine) Level() song.Level { return e.level }
-
-// SetLevel changes it and lays the events out again. Nothing else moves: a
-// level takes no note away and only what is written on one, so the cursor is
-// still on the note it was on and every verdict already given still stands.
-func (e *Engine) SetLevel(level song.Level) {
-	e.level = level
-	e.Events = e.Song.EventsAt(level)
-}
-
-// SetSpeed keeps the multiplier inside its ends, and it is the one way in:
-// asking for a beat in bpm ends up here too, so the two cannot disagree.
-func (e *Engine) SetSpeed(speed float64) float64 {
-	if speed < MinSpeed {
-		speed = MinSpeed
-	}
-	if speed > MaxSpeed {
-		speed = MaxSpeed
-	}
-	e.Speed = speed
-	return speed
-}
-
-// speed is the multiplier as the clock reads it, since a zero left on the
-// field would stop the song rather than run it as written.
-func (e *Engine) speed() float64 {
-	if e.Speed <= 0 {
-		return 1
-	}
-	return e.Speed
 }
 
 func (e *Engine) Cursor() int         { return e.cursor }
 func (e *Engine) Passes() int         { return e.passes }
-func (e *Engine) Running() bool       { return e.running }
 func (e *Engine) Results() []Result   { return e.results }
-func (e *Engine) Detected() int       { return e.detected }
-func (e *Engine) Done() bool          { return e.cursor >= len(e.Events) }
 func (e *Engine) Result(i int) Result { return e.results[i] }
 
-// Current is the event being waited for, and false once the song is over.
+// Empty is a song with nothing in it to play, which is the one state with no
+// event under the cursor. The cursor never runs off the end of a song that has
+// notes in it: the last note is where it stops.
+func (e *Engine) Empty() bool { return e.cursor >= len(e.Events) }
+
+// Current is the event being waited for.
 func (e *Engine) Current() (song.Event, bool) {
-	if e.Done() {
+	if e.Empty() {
 		return song.Event{}, false
 	}
 	return e.Events[e.cursor], true
 }
 
-func (e *Engine) Start(now time.Time) {
-	e.origin = now
-	e.running = true
-}
-
-func (e *Engine) Stop() {
-	e.running = false
-}
-
-// Reset puts the song back at the first note and forgets every verdict.
-func (e *Engine) Reset() {
-	e.results = make([]Result, len(e.Events))
-	e.cursor = 0
-	e.running = false
-	e.offsets = nil
-	e.detected = 0
-	e.passes = 0
-
-	// starting over inside a passage means the top of the passage, not the top
-	// of a song the loop is not going to play
-	if first := e.repeatStart(); first >= 0 {
-		e.cursor = first
-	}
-}
-
 // Seek jumps to an event, which is how somebody practises one measure over and
-// over without playing the three before it every time.
+// over without playing the three before it every time. The last note is as far
+// as it goes: a cursor past the end is a screen whose caret and whose measure
+// number are about two different places.
 func (e *Engine) Seek(index int) {
 	if index < 0 {
 		index = 0
 	}
-	if index > len(e.Events) {
-		index = len(e.Events)
+	if last := len(e.Events) - 1; index > last {
+		index = last
+	}
+	if index < 0 {
+		index = 0
 	}
 	e.cursor = index
 }
@@ -257,14 +130,14 @@ func (e *Engine) ClearRepeat() {
 }
 
 // Loop puts the cursor back at the top of the picked measures whenever it is
-// outside them, and says whether it had to. Heard and Tick call it as the
-// cursor moves on, and the screen calls it when a measure is picked, since a
-// loop nobody is inside of repeats nothing.
-func (e *Engine) Loop(now time.Time) bool {
+// outside them, and says whether it had to. Heard calls it as the cursor moves
+// on, and the screen calls it when a measure is picked, since a loop nobody is
+// inside of repeats nothing.
+func (e *Engine) Loop() bool {
 	if !e.Looping() {
 		return false
 	}
-	if !e.Done() && e.repeat[e.Events[e.cursor].Measure] {
+	if !e.Empty() && e.repeat[e.Events[e.cursor].Measure] {
 		return false
 	}
 
@@ -274,7 +147,7 @@ func (e *Engine) Loop(now time.Time) bool {
 	}
 
 	// the pass that just ended is not this one, so what it was judged on goes
-	// with it and the accuracy is about the take being played now
+	// with it and what the screen paints is about the take being played now
 	for index := range e.Events {
 		if e.repeat[e.Events[index].Measure] {
 			e.results[index] = Result{}
@@ -285,7 +158,6 @@ func (e *Engine) Loop(now time.Time) bool {
 		e.passes++
 	}
 	e.cursor = first
-	e.rewindClock(now)
 
 	return true
 }
@@ -300,179 +172,26 @@ func (e *Engine) repeatStart() int {
 	return -1
 }
 
-// rewindClock puts the clock back where the passage begins, a count in short
-// of it, so a loop in tempo mode comes round with a bar to breathe in instead
-// of writing off every note it jumped over. Wait mode has no clock to move.
-func (e *Engine) rewindClock(now time.Time) {
-	if e.Mode != Tempo || !e.running {
-		return
-	}
-
-	at := e.Events[e.cursor].Time * float64(time.Second)
-	e.origin = now.Add(-time.Duration(at / e.speed()))
-}
-
-// Elapsed is where the clock is inside the song, negative during the count in.
-func (e *Engine) Elapsed(now time.Time) time.Duration {
-	if !e.running {
-		return 0
-	}
-	return time.Duration(float64(now.Sub(e.origin)-countIn) * e.speed())
-}
-
-// CountIn is what is left of the count in, and zero once the song is running.
-func (e *Engine) CountIn(now time.Time) time.Duration {
-	if elapsed := e.Elapsed(now); elapsed < 0 {
-		return -elapsed
-	}
-	return 0
-}
-
-// Beat is the position inside the measure, for the flashing metronome. It is
-// derived from the tempo of the measure the cursor is in, since a song may
-// change tempo halfway through.
-func (e *Engine) Beat(now time.Time) float64 {
-	elapsed := e.Elapsed(now).Seconds()
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	return e.Song.BeatAt(elapsed)
-}
-
-// Pulse is where the clock is inside the bar: which pulse of the measure, and
-// how many the measure holds. It counts in the unit the signature is written
-// in, so a bar of six eight is six pulses and not three.
-func (e *Engine) Pulse(now time.Time) (int, int) {
-	beat := e.Beat(now)
-
-	measure := e.Song.MeasureAt(e.Elapsed(now).Seconds())
-
-	count, unit := measure.Signature[0], measure.Signature[1]
-	if count <= 0 {
-		count = 4
-	}
-	if unit <= 0 {
-		unit = 4
-	}
-
-	// Beat counts in quarter notes, and one pulse of the signature is worth
-	// four over its denominator of them
-	length := 4.0 / float64(unit)
-	pulse := int((beat - measure.Beat) / length)
-	if pulse < 0 {
-		pulse = 0
-	}
-
-	return pulse % count, count
-}
-
-// Tick moves the clock in tempo mode and writes off the notes whose moment has
-// passed. It does nothing in wait mode, which has no moment to miss.
-func (e *Engine) Tick(now time.Time) {
-	if !e.running || e.Mode != Tempo {
-		return
-	}
-
-	elapsed := e.Elapsed(now)
-	for e.cursor < len(e.Events) {
-		at := time.Duration(e.Events[e.cursor].Time * float64(time.Second))
-		if elapsed < at+window {
-			return
-		}
-		if e.results[e.cursor].Verdict == Pending {
-			e.results[e.cursor].Verdict = Missed
-		}
-		e.cursor++
-		if e.Loop(now) {
-			return
-		}
-	}
-}
-
 // Heard feeds one note from the detector and returns the verdict it produced.
-//
-// In wait mode a wrong note leaves the cursor where it is, because the point
-// of the mode is that the passage does not go on until it is right.
-func (e *Engine) Heard(midi int, now time.Time) Verdict {
-	if e.Done() {
-		return Pending
-	}
-	e.detected++
-
-	if e.Mode == Wait {
-		if !e.Events[e.cursor].Matches(midi) {
-			e.results[e.cursor] = Result{Verdict: Wrong, Played: midi}
-			return Wrong
-		}
-		e.results[e.cursor] = Result{Verdict: Hit, Played: midi}
-		e.cursor++
-		e.Loop(now)
-		return Hit
-	}
-
-	if !e.running || e.Elapsed(now) < 0 {
+// A wrong note leaves the cursor where it is, because the point of the whole
+// thing is that the passage does not go on until it is right.
+func (e *Engine) Heard(midi int) Verdict {
+	if e.Empty() {
 		return Pending
 	}
 
-	elapsed := e.Elapsed(now)
-	// the note may belong to the event under the cursor or to the next one,
-	// since somebody playing ahead of the beat gets there before Tick does
-	for index := e.cursor; index < len(e.Events) && index <= e.cursor+1; index++ {
-		at := time.Duration(e.Events[index].Time * float64(time.Second))
-		offset := elapsed - at
-		if offset < -window || offset > window {
-			continue
-		}
-		if !e.Events[index].Matches(midi) {
-			continue
-		}
-		e.results[index] = Result{Verdict: Hit, Played: midi, Offset: offset}
-		e.offsets = append(e.offsets, offset)
-		e.cursor = index + 1
-		e.Loop(now)
-		return Hit
+	if !e.Events[e.cursor].Matches(midi) {
+		e.results[e.cursor] = Result{Verdict: Wrong, Played: midi}
+		return Wrong
 	}
 
-	e.results[e.cursor] = Result{Verdict: Wrong, Played: midi}
-	return Wrong
-}
+	e.results[e.cursor] = Result{Verdict: Hit, Played: midi}
 
-// Score counts what has been judged so far, not the whole song, so the number
-// on the screen means the passage that was actually played.
-func (e *Engine) Score() Score {
-	score := Score{}
-	var total time.Duration
+	// the step past the last note is what a passage ending on it comes round
+	// from, and Seek is what keeps the cursor inside the song after it
+	e.cursor++
+	e.Loop()
+	e.Seek(e.cursor)
 
-	for index, result := range e.results {
-		if index >= e.cursor && result.Verdict == Pending {
-			continue
-		}
-		score.Total++
-		switch result.Verdict {
-		case Hit:
-			score.Hits++
-			total += result.Offset
-		case Wrong:
-			score.Wrongs++
-		case Missed:
-			score.Missed++
-		}
-	}
-
-	if score.Total > 0 {
-		score.Accuracy = float64(score.Hits) / float64(score.Total)
-	}
-	if len(e.offsets) > 0 {
-		score.AvgOffset = total / time.Duration(len(e.offsets))
-	}
-
-	return score
-}
-
-// Progress is how far into the song the cursor is, from zero to one.
-func (e *Engine) Progress() float64 {
-	if len(e.Events) == 0 {
-		return 0
-	}
-	return math.Min(1, float64(e.cursor)/float64(len(e.Events)))
+	return Hit
 }

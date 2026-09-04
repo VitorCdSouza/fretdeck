@@ -6,16 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/VitorCdSouza/fretdeck/internal/bridge"
+	"github.com/VitorCdSouza/fretdeck/internal/cifraclub"
 	"github.com/VitorCdSouza/fretdeck/internal/config"
 	"github.com/VitorCdSouza/fretdeck/internal/practice"
 	"github.com/VitorCdSouza/fretdeck/internal/song"
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 	"github.com/VitorCdSouza/fretdeck/internal/ultimate"
 )
 
@@ -66,10 +67,10 @@ func model(t *testing.T) *Model {
 	input.Prompt = "  "
 
 	loaded := riff()
-	engine := practice.New(loaded, practice.Wait)
+	engine := practice.New(loaded)
 
 	return &Model{
-		cfg:     config.Config{Device: 1, Rate: 44100, Library: "/home/somebody/fretdeck/songs", Speed: 1},
+		cfg:     config.Config{Device: 1, Rate: 44100, Library: "/home/somebody/fretdeck/songs"},
 		width:   96,
 		height:  30,
 		songs:   []*song.Song{loaded},
@@ -88,7 +89,7 @@ func model(t *testing.T) *Model {
 // terminal, which in the alt screen means the header walks off the top.
 func TestEveryScreenFitsItsWindow(t *testing.T) {
 	m := model(t)
-	m.engine.Heard(44, time.Now())
+	m.engine.Heard(44)
 
 	for index := range screenNames {
 		which := screen(index)
@@ -105,16 +106,11 @@ func TestEveryScreenFitsItsWindow(t *testing.T) {
 	}
 }
 
-// TestTheHelpAndTheHighwayFitTheWindowToo covers the two views that are not a
-// screen of their own and so are missed by the loop above.
-func TestTheHelpAndTheHighwayFitTheWindowToo(t *testing.T) {
+// TestTheHelpFitsTheWindowToo covers the view that is not a screen of its own
+// and so is missed by the loop above.
+func TestTheHelpFitsTheWindowToo(t *testing.T) {
 	m := model(t)
 
-	m.screen = screenPractice
-	m.highway = true
-	mustFit(t, m, "highway")
-
-	m.highway = false
 	m.helping = true
 	mustFit(t, m, "help")
 
@@ -185,8 +181,8 @@ func TestMovingOnAnEmptyListIsNotACrash(t *testing.T) {
 	m.move(1)
 	m.jump(1)
 
-	if m.found != 0 {
-		t.Fatalf("want the cursor at zero, got %d", m.found)
+	if m.musicCursor() != fieldRow {
+		t.Fatalf("want the cursor on the field, got %d", m.musicCursor())
 	}
 }
 
@@ -388,9 +384,9 @@ func TestABassPlayerSeesTheBassTabsFirst(t *testing.T) {
 	m := model(t)
 	m.cfg.Instrument = "bass"
 	m.results = []finding{
-		{Title: "one", Kind: ultimate.KindChord},
-		{Title: "two", Kind: ultimate.KindTab},
-		{Title: "three", Kind: ultimate.KindBass},
+		{Title: "one", Kind: tabsite.KindChord},
+		{Title: "two", Kind: tabsite.KindTab},
+		{Title: "three", Kind: tabsite.KindBass},
 	}
 
 	m.sortByInstrument()
@@ -402,7 +398,7 @@ func TestABassPlayerSeesTheBassTabsFirst(t *testing.T) {
 	m.cfg.Instrument = "guitar"
 	m.sortByInstrument()
 
-	if m.results[0].Kind != ultimate.KindTab {
+	if m.results[0].Kind != tabsite.KindTab {
 		t.Fatalf("a guitar player sees the guitar tab first, got %q", m.results[0].Kind)
 	}
 }
@@ -510,10 +506,10 @@ func TestOneLookupAnswersEveryVersionOfASong(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
 	m.focus = paneSearch
-	m.showTabs([]ultimate.Result{
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 1, URL: "one"},
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 2, URL: "two"},
-		{Artist: "Nobody", Title: "Another One", Kind: ultimate.KindTab, Version: 1, URL: "three"},
+	m.showTabs([]tabsite.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 1, URL: "one"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 2, URL: "two"},
+		{Artist: "Nobody", Title: "Another One", Kind: tabsite.KindTab, Version: 1, URL: "three"},
 	})
 
 	if stillLooking(m.results) != 2 {
@@ -556,11 +552,11 @@ func TestSearchGroupsTheVersionsOfASong(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
 	m.focus = paneSearch
-	m.showTabs([]ultimate.Result{
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 1, Rating: 5, Votes: 2, URL: "one"},
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 2, Rating: 4.7, Votes: 300, URL: "two"},
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindBass, Version: 1, Rating: 4.5, Votes: 40, URL: "bass"},
-		{Artist: "Nobody", Title: "Another One", Kind: ultimate.KindTab, Version: 1, Rating: 4, Votes: 10, URL: "four"},
+	m.showTabs([]tabsite.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 1, Rating: 5, Votes: 2, URL: "one"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 2, Rating: 4.7, Votes: 300, URL: "two"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindBass, Version: 1, Rating: 4.5, Votes: 40, URL: "bass"},
+		{Artist: "Nobody", Title: "Another One", Kind: tabsite.KindTab, Version: 1, Rating: 4, Votes: 10, URL: "four"},
 	})
 
 	if len(m.results) != 3 {
@@ -582,7 +578,7 @@ func TestSearchGroupsTheVersionsOfASong(t *testing.T) {
 	// it sits at the bottom, since a tab for the other instrument is somebody
 	// else's part
 	bass := m.results[len(m.results)-1]
-	if bass.Kind != ultimate.KindBass || bass.Count != 1 {
+	if bass.Kind != tabsite.KindBass || bass.Count != 1 {
 		t.Fatalf("the bass part is its own row, got kind %q count %d",
 			bass.Kind, bass.Count)
 	}
@@ -595,11 +591,11 @@ func TestEnterOpensAndClosesTheVersions(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
 	m.focus = paneSearch
-	m.showTabs([]ultimate.Result{
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 1, Rating: 4, Votes: 100, URL: "one"},
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 2, Rating: 4.8, Votes: 200, URL: "two"},
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 3, Rating: 4.6, Votes: 150, URL: "three"},
-		{Artist: "Nobody", Title: "Another One", Kind: ultimate.KindTab, Version: 1, URL: "four"},
+	m.showTabs([]tabsite.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 1, Rating: 4, Votes: 100, URL: "one"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 2, Rating: 4.8, Votes: 200, URL: "two"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 3, Rating: 4.6, Votes: 150, URL: "three"},
+		{Artist: "Nobody", Title: "Another One", Kind: tabsite.KindTab, Version: 1, URL: "four"},
 	})
 
 	m.found = 0
@@ -648,8 +644,8 @@ func TestEnterOnASingleVersionReadsIt(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
 	m.focus = paneSearch
-	m.showTabs([]ultimate.Result{
-		{Artist: "Nobody", Title: "Test Riff", Kind: ultimate.KindTab, Version: 1, URL: "one"},
+	m.showTabs([]tabsite.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 1, URL: "one"},
 	})
 
 	if m.results[0].heads() {
@@ -977,6 +973,55 @@ func TestTheWheelScrollsTheListUnderIt(t *testing.T) {
 	}
 }
 
+// TestTheSiteCanBeSwitched is the whole of what the config row is for: the two
+// sites answer differently and the one in force is what a search goes to.
+func TestTheSiteCanBeSwitched(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	m := model(t)
+	m.screen = screenConfig
+	m.results = []finding{{Title: "read off the other site"}}
+	m.configRow = m.configCount() - len(tabsite.Sites) - 1
+
+	kind, at := m.configPick()
+	if kind != configSite || tabsite.Sites[at].Name != tabsite.Ultimate {
+		t.Fatalf("the site list does not start where the cursor was put, got kind %d at %d", kind, at)
+	}
+
+	m.configRow++
+	m.keepConfig()
+
+	if m.cfg.Site != tabsite.Cifra {
+		t.Fatalf("the site was not kept, config says %q", m.cfg.Site)
+	}
+	if config.Load().Site != tabsite.Cifra {
+		t.Fatal("the answer did not survive the run")
+	}
+	if _, ok := m.site.(*cifraclub.Client); !ok {
+		t.Fatalf("the search is still going to %T", m.site)
+	}
+	if len(m.results) != 0 {
+		t.Fatal("the rows of the site that was left are pages this one cannot read")
+	}
+}
+
+// TestAPageIsReadByTheSiteItCameFrom is the recent list: it keeps addresses
+// from before the site was last changed, and neither site can read the
+// other's page.
+func TestAPageIsReadByTheSiteItCameFrom(t *testing.T) {
+	chosen := openSite(tabsite.Cifra)
+
+	if _, ok := siteOf("https://tabs.ultimate-guitar.com/tab/nobody/one-2", chosen).(*ultimate.Client); !ok {
+		t.Fatal("an ultimate guitar address went to the site the config names")
+	}
+	if _, ok := siteOf("https://www.cifraclub.com.br/nobody/one/", chosen).(*cifraclub.Client); !ok {
+		t.Fatal("a cifra club address went somewhere else")
+	}
+	if siteOf("https://example.invalid/one", chosen) != chosen {
+		t.Fatal("an address of neither is read by the site in force, since that is where it was found")
+	}
+}
+
 // TestTheMouseCanBeTurnedOff is why the switch is there: a terminal reporting
 // the mouse is a terminal that no longer selects text with it.
 func TestTheMouseCanBeTurnedOff(t *testing.T) {
@@ -1116,52 +1161,6 @@ func TestARefreshThatIsNotAnsweredSaysSo(t *testing.T) {
 	}
 }
 
-// TestTheCalloutNamesADyadFromTheBassUp is the line somebody reads with their
-// hands busy, and a note plus a bare +1 beside it reads as a semitone.
-func TestTheCalloutNamesADyadFromTheBassUp(t *testing.T) {
-	event := song.Event{Notes: []song.Note{
-		{String: 4, Fret: 2, Midi: 52},
-		{String: 5, Fret: 0, Midi: 45},
-	}}
-
-	if got := chordName(event); got != "A2 E3" {
-		t.Fatalf("want both names lowest first, got %q", got)
-	}
-	if got := where(event); got != "string 5 open · string 4 fret 2" {
-		t.Fatalf("the positions have to follow the names, got %q", got)
-	}
-
-	event.Notes = append(event.Notes, song.Note{String: 6, Fret: 3, Midi: 43})
-	if got := chordName(event); got != "G2 +2 notes" {
-		t.Fatalf("want the lowest note and a count of the rest, got %q", got)
-	}
-}
-
-// TestTheNeckCrossesTheStringsThatDoNotSound is the other half of the same
-// question the tab answers: a neck with two dots on it says nothing about the
-// string between them until the string says it.
-func TestTheNeckCrossesTheStringsThatDoNotSound(t *testing.T) {
-	m := model(t)
-	event := song.Event{Notes: []song.Note{
-		{String: 3, Fret: 2, Midi: 57},
-		{String: 5, Fret: 0, Midi: 45},
-	}}
-
-	rows := m.fretboard(event, m.current.Tuning)
-	// the fret numbers, then the six strings from the top down
-	g, a, d := stripAnsi(rows[3]), stripAnsi(rows[5]), stripAnsi(rows[4])
-
-	if !strings.Contains(g, "●") || strings.Contains(g, "×") {
-		t.Fatalf("the fretted string is not crossed: %q", g)
-	}
-	if !strings.Contains(a, "○") || strings.Contains(a, "×") {
-		t.Fatalf("the open string wants a ring and no cross: %q", a)
-	}
-	if !strings.Contains(d, "×") {
-		t.Fatalf("the string between the two notes has to say it stays quiet: %q", d)
-	}
-}
-
 // TestTheRowUnderTheCursorIsPaintedAcross is the band the cursor is found by.
 // It has to be under every piece of the row: what a row answers is written at
 // the far edge of the screen, and a background laid over a finished line stops
@@ -1175,7 +1174,7 @@ func TestTheRowUnderTheCursorIsPaintedAcross(t *testing.T) {
 
 	m := &Model{width: 80}
 	item := finding{Title: "Seven Nation Army", Artist: "The White Stripes",
-		From: sourceUltimate, Kind: ultimate.KindTab, Version: 4,
+		From: sourceSearch, Kind: tabsite.KindTab, Version: 4,
 		Rating: 4.8, Votes: 1089, Level: 2, State: lookupDone}
 
 	row := m.findingRow(item, true, m.width)
@@ -1194,5 +1193,118 @@ func TestTheRowUnderTheCursorIsPaintedAcross(t *testing.T) {
 
 	if plain := m.findingRow(item, false, m.width); strings.Contains(plain, band) {
 		t.Fatal("a row the cursor is not on was painted too")
+	}
+}
+
+// TestKWalksOffTheListOntoTheField is the top of the search column: the field
+// is the row above the first result, and the cursor stops there.
+func TestKWalksOffTheListOntoTheField(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.focus = paneSearch
+	m.results = []finding{{Artist: "band", Title: "one"}, {Artist: "band", Title: "two"}}
+	m.found = 1
+
+	press(m, "k")
+	if m.musicCursor() != 0 {
+		t.Fatalf("k left the cursor at %d", m.musicCursor())
+	}
+
+	press(m, "k")
+	if !m.onField() {
+		t.Fatalf("k did not walk onto the field, cursor at %d", m.musicCursor())
+	}
+
+	press(m, "k")
+	if !m.onField() {
+		t.Fatal("k walked off the top of the column")
+	}
+
+	press(m, "j")
+	if m.musicCursor() != 0 {
+		t.Fatalf("j did not come back to the first row, cursor at %d", m.musicCursor())
+	}
+}
+
+// TestEnterOnTheFieldStartsTyping is what the field being a row means: the key
+// that answers a row opens the one it is on.
+func TestEnterOnTheFieldStartsTyping(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.focus = paneSearch
+	m.results = nil
+
+	press(m, "enter")
+
+	if !m.input.Focused() || m.mode != modeInsert {
+		t.Fatalf("enter on the field left the app in the %s mode, focused %v", m.mode, m.input.Focused())
+	}
+}
+
+// TestTheRecentRowSaysWhichSiteItCameFrom is the mark beside a played song:
+// the two sites cannot read each other's pages, so which one answered for a
+// song is part of the song.
+func TestTheRecentRowSaysWhichSiteItCameFrom(t *testing.T) {
+	m := model(t)
+
+	from := m.recentRow(finding{Artist: "band", Title: "one",
+		URL: "https://tabs.ultimate-guitar.com/tab/band/one-123"}, false, 36)
+	if !strings.Contains(strings.Join(from, "\n"), "ug") {
+		t.Fatalf("the row does not say where it came from: %q", from)
+	}
+
+	cifra := m.recentRow(finding{Artist: "band", Title: "one",
+		URL: "https://www.cifraclub.com.br/band/one/"}, false, 36)
+	if !strings.Contains(strings.Join(cifra, "\n"), "cc") {
+		t.Fatalf("the row does not say where it came from: %q", cifra)
+	}
+
+	// a song imported from a file came off no site and is marked with nothing
+	imported := strings.Join(m.recentRow(finding{Artist: "band", Title: "one",
+		Path: "/songs/one.json"}, false, 36), "\n")
+	if strings.Contains(imported, "ug") || strings.Contains(imported, "cc") {
+		t.Fatalf("a song off no site was marked with one: %q", imported)
+	}
+}
+
+// TestTheBarOffersWhatTheRowUnderTheCursorTakes is the one place a key is
+// offered outside the help: the row being looked at says what can be done to
+// it, and a column with nothing under the cursor says nothing.
+func TestTheBarOffersWhatTheRowUnderTheCursorTakes(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.kept = []finding{{Artist: "band", Title: "one"}}
+
+	if !strings.Contains(m.footer(), "delete music") {
+		t.Fatalf("the bar does not offer d on a played song: %q", m.footer())
+	}
+
+	m.focus = paneSearch
+	if strings.Contains(m.footer(), "delete music") {
+		t.Fatal("the bar offers d on the column it does not belong to")
+	}
+
+	m.focus, m.kept = paneRecent, nil
+	if strings.Contains(m.footer(), "delete music") {
+		t.Fatal("the bar offers d with nothing under the cursor")
+	}
+}
+
+// TestTheRemovalAsksOnTheBar is what d was missing: the question was set on a
+// status nothing draws, so the key that answers it was never offered.
+func TestTheRemovalAsksOnTheBar(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.kept = []finding{{Artist: "band", Title: "one", Path: "/songs/one.json"}}
+
+	press(m, "d")
+
+	if !m.removing {
+		t.Fatal("d did not ask about the file")
+	}
+
+	bar := m.footer()
+	if !strings.Contains(bar, "remove one?") || !strings.Contains(bar, "[y]") {
+		t.Fatalf("the bar does not ask: %q", bar)
 	}
 }

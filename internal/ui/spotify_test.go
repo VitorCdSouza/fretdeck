@@ -73,7 +73,7 @@ func TestAPlaylistIsSortedEasiestFirst(t *testing.T) {
 func TestTheTwoListsAreNotTheSameList(t *testing.T) {
 	m := model(t)
 	m.linked = true
-	m.results = []finding{{From: sourceUltimate, Title: "a search result"}}
+	m.results = []finding{{From: sourceSearch, Title: "a search result"}}
 	m.showTracks([]spotifyTrack{{Artist: "Nobody", Title: "a track"}})
 
 	m.screen = screenSpotify

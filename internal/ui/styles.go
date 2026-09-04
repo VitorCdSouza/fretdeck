@@ -155,24 +155,6 @@ func pad(left, right string, width int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// bar is the progress line under the tab. The filled part is drawn with the
-// upper eighth block so it reads as a line and not as a wall of colour.
-func bar(fraction float64, width int, style lipgloss.Style) string {
-	if width < 1 {
-		return ""
-	}
-	if fraction < 0 {
-		fraction = 0
-	}
-	if fraction > 1 {
-		fraction = 1
-	}
-
-	filled := int(fraction * float64(width))
-	return style.Render(strings.Repeat("▔", filled)) +
-		styleFaint.Render(strings.Repeat("▁", width-filled))
-}
-
 // marker is the caret drawn over the string being played, so the eye finds the
 // line without reading the fret numbers first.
 const marker = "▾"

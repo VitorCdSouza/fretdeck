@@ -21,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
 const search = "https://www.ultimate-guitar.com/search.php"
@@ -33,17 +35,9 @@ const agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like G
 // memory.
 const maxPage = 8 << 20
 
-// the names the site gives the things it calls a tab. Only the first two have
-// frets in them: chords is a chord sheet, and the other two are binaries behind
-// a subscription.
-const (
-	KindTab   = "Tabs"
-	KindBass  = "Bass Tabs"
-	KindChord = "Chords"
-)
-
-// Result is one row of a search.
-type Result struct {
+// row is one result as the site writes it. What the rest of the app reads is
+// tabsite.Result, so the names of the fields there answer to nobody's json.
+type row struct {
 	Artist  string  `json:"artist_name"`
 	Title   string  `json:"song_name"`
 	Kind    string  `json:"type"`
@@ -54,27 +48,17 @@ type Result struct {
 	URL     string  `json:"tab_url"`
 }
 
-// Playable answers whether a kind of transcription has frets in it to read. A
-// chord sheet is chord names over lyrics and there is nothing to fret; the pro
-// and power files are binaries the site sells and does not serve.
-func Playable(kind string) bool {
-	return kind == KindTab || kind == KindBass
-}
-
-func (r Result) Playable() bool { return Playable(r.Kind) }
-
-// Tab is one transcription, with its text already cleaned of the markers the
-// site writes around it.
-type Tab struct {
-	Artist  string
-	Title   string
-	Kind    string
-	Version int
-	Level   string
-	Tuning  string
-	Capo    int
-	Text    string
-	URL     string
+func (r row) result() tabsite.Result {
+	return tabsite.Result{
+		Artist:  r.Artist,
+		Title:   r.Title,
+		Kind:    r.Kind,
+		Version: r.Version,
+		Rating:  r.Rating,
+		Votes:   r.Votes,
+		Level:   r.Level,
+		URL:     r.URL,
+	}
 }
 
 // Client is the http client used here. It exists so the tests can point at a
@@ -90,27 +74,32 @@ func New() *Client {
 
 // Search asks for every transcription of a song, the ones that can be read
 // first.
-func (c *Client) Search(ctx context.Context, pattern string) ([]Result, error) {
+func (c *Client) Search(ctx context.Context, pattern string) ([]tabsite.Result, error) {
 	address := c.Base + "?search_type=title&value=" + url.QueryEscape(pattern)
 
 	var page struct {
-		Results []Result `json:"results"`
+		Results []row `json:"results"`
 	}
 	if err := c.load(ctx, address, &page); err != nil {
 		return nil, err
 	}
 
+	found := make([]tabsite.Result, 0, len(page.Results))
+	for _, item := range page.Results {
+		found = append(found, item.result())
+	}
+
 	// what cannot be read keeps its place at the bottom rather than being
 	// dropped: seeing that a song is only up as chords is an answer too
-	sort.SliceStable(page.Results, func(i, j int) bool {
-		return page.Results[i].Playable() && !page.Results[j].Playable()
+	sort.SliceStable(found, func(i, j int) bool {
+		return found[i].Playable() && !found[j].Playable()
 	})
 
-	return page.Results, nil
+	return found, nil
 }
 
 // Fetch reads one tab page. The address is the one a search answered with.
-func (c *Client) Fetch(ctx context.Context, address string) (*Tab, error) {
+func (c *Client) Fetch(ctx context.Context, address string) (*tabsite.Tab, error) {
 	var page tabPage
 	if err := c.load(ctx, address, &page); err != nil {
 		return nil, err
@@ -121,7 +110,7 @@ func (c *Client) Fetch(ctx context.Context, address string) (*Tab, error) {
 		return nil, errors.New("that page carries no tab, only a link to buy one")
 	}
 
-	tab := &Tab{
+	tab := &tabsite.Tab{
 		Artist:  page.Tab.Artist,
 		Title:   page.Tab.Title,
 		Kind:    page.Tab.Kind,

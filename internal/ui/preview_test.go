@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VitorCdSouza/fretdeck/internal/ultimate"
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
 // TestTheFirstLinesAreTheTabAndNotTheBlanksBeforeIt is what makes a pane of
@@ -29,8 +29,8 @@ func TestThePageIsReadOnceTheCursorHasComeToRest(t *testing.T) {
 	m.screen = screenMusic
 	m.focus = paneSearch
 	m.results = []finding{
-		{Title: "one", Kind: ultimate.KindTab, URL: "a"},
-		{Title: "two", Kind: ultimate.KindTab, URL: "b"},
+		{Title: "one", Kind: tabsite.KindTab, URL: "a"},
+		{Title: "two", Kind: tabsite.KindTab, URL: "b"},
 	}
 
 	now := time.Now()
@@ -68,7 +68,7 @@ func TestThePaneSaysWhatItHas(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
 	m.focus = paneSearch
-	m.results = []finding{{Title: "one", Kind: ultimate.KindTab, URL: "a"}}
+	m.results = []finding{{Title: "one", Kind: tabsite.KindTab, URL: "a"}}
 
 	if lines := m.viewPreview(m.width, 12); len(lines) == 0 {
 		t.Fatal("a row that is not here yet is what the pane is for")
@@ -79,7 +79,7 @@ func TestThePaneSaysWhatItHas(t *testing.T) {
 		t.Fatal("a page on its way has to say so")
 	}
 
-	m.pages["a"] = &page{tab: &ultimate.Tab{Text: "e|--0--|\n"}}
+	m.pages["a"] = &page{tab: &tabsite.Tab{Text: "e|--0--|\n"}}
 	if !strings.Contains(stripAnsi(strings.Join(m.viewPreview(m.width, 12), " ")), "e|--0--|") {
 		t.Fatal("the tab did not make it onto the pane")
 	}

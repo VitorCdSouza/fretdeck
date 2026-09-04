@@ -261,7 +261,7 @@ func (m *Model) pressSpotify() tea.Cmd {
 	}
 
 	// spotify knows an artist and a title, so enter is the search for them
-	return tea.Batch(m.goTo(screenMusic), m.askUltimate(item.Artist+" "+item.Title))
+	return tea.Batch(m.goTo(screenMusic), m.askSite(item.Artist+" "+item.Title))
 }
 
 func (m *Model) viewSpotify() string {

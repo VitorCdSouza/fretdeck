@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
 // exercise is a tab written here rather than taken off the site, so the test
@@ -68,7 +70,7 @@ func TestSearchPutsTheReadableOnesFirst(t *testing.T) {
 	if len(found) != 3 {
 		t.Fatalf("want 3 rows, got %d", len(found))
 	}
-	if found[0].Kind != KindTab {
+	if found[0].Kind != tabsite.KindTab {
 		t.Fatalf("the tab comes first, got %q", found[0].Kind)
 	}
 	if found[0].Version != 2 || found[0].Votes != 12 {

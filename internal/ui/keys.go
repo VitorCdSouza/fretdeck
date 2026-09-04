@@ -1,11 +1,7 @@
 package ui
 
 import (
-	"fmt"
-	"math"
-	"strconv"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -128,7 +124,6 @@ func (m *Model) move(delta int) {
 		}
 		// up and down on a tab means the note before and the note after, since
 		// there is nothing else to move through
-		m.engine.Stop()
 		m.engine.Seek(m.engine.Cursor() + delta)
 	}
 }
@@ -147,7 +142,6 @@ func (m *Model) jump(direction int) {
 		if m.engine == nil {
 			return
 		}
-		m.engine.Stop()
 		if direction < 0 {
 			m.engine.Seek(0)
 			return
@@ -186,12 +180,6 @@ func clamp(value, length int) int {
 }
 
 func (m *Model) goTo(next screen) tea.Cmd {
-	// leaving the practice screen stops the clock. coming back to a song that
-	// kept counting while nobody was looking would report a wall of misses
-	if m.screen == screenPractice && m.engine != nil {
-		m.engine.Stop()
-	}
-
 	// the repeat mode is that screen's, and its keys mean something else on
 	// every other one. what was picked is kept and is still looped over
 	if next != screenPractice {
@@ -234,11 +222,8 @@ func (m *Model) typing(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 
-		switch asked {
-		case askingQuery:
-			return m.askUltimate(value)
-		case askingBpm:
-			return m.setBpm(value)
+		if asked == askingQuery {
+			return m.askSite(value)
 		}
 		return nil
 	}
@@ -259,19 +244,7 @@ func (m *Model) closeInput() {
 // song comes off a row of the search.
 func (m *Model) open(loaded *song.Song) {
 	m.current = loaded
-	m.engine = practice.New(loaded, practice.Wait)
-	m.engine.SetSpeed(m.cfg.Speed)
-	m.engine.SetLevel(song.ReadLevel(m.cfg.Level))
-
-	// a song with a tempo of its own is run by scaling that, and the beat kept
-	// in the config is the one the click falls back on where there is none
-	if loaded.Untimed || loaded.Tempo <= 0 {
-		m.engine.SetBpm(m.cfg.Bpm)
-	}
-	if m.cfg.Click {
-		m.engine.StartClick(time.Now())
-	}
-
+	m.engine = practice.New(loaded)
 	m.tab = song.NewTab(loaded, m.engine.Events)
 	m.screen = screenPractice
 	m.status = ""
@@ -283,46 +256,12 @@ func (m *Model) keyPractice(key string) tea.Cmd {
 	}
 
 	switch key {
-	case "v":
-		m.highway = !m.highway
-
+	// the space is what picks a passage, since the measure under the cursor is
+	// the thing already being looked at. it means nothing outside that mode
 	case " ":
-		// in the repeat mode the space is what picks a passage, since the
-		// measure under the cursor is the thing already being looked at
 		if m.mode == modeRepeat {
 			m.pickRepeat()
-			return nil
 		}
-
-		// wait mode has no clock to start, and saying stopped there would be
-		// answering a question nobody asked
-		if m.engine.Mode == practice.Wait {
-			m.status = "wait mode has no clock, just play the note"
-			return nil
-		}
-		if m.engine.Running() {
-			m.engine.Stop()
-			m.status = "stopped"
-			return nil
-		}
-		m.engine.Start(time.Now())
-		m.status = ""
-
-	case "m":
-		if m.engine.Mode == practice.Wait {
-			// a text tab carries the notes and their order and nothing else.
-			// running a clock over it would mark somebody wrong for playing
-			// the rhythm the song actually has
-			if m.current.Untimed {
-				m.fail = "this tab came as text, so it has no rhythm to run a clock against"
-				return nil
-			}
-			m.engine.Mode = practice.Tempo
-		} else {
-			m.engine.Mode = practice.Wait
-		}
-		m.engine.Stop()
-		m.engine.Reset()
 
 	case "r":
 		// r a second time is how the passage is dropped: the hand is on the
@@ -336,38 +275,15 @@ func (m *Model) keyPractice(key string) tea.Cmd {
 		m.setMode(modeRepeat)
 		m.status = "space marks the measure under the cursor, r lets it go"
 
-	case "R":
-		m.engine.Reset()
-		m.status = ""
-
 	case "h", "left":
-		m.engine.Stop()
 		m.engine.Seek(m.engine.Cursor() - 1)
 	case "l", "right":
-		m.engine.Stop()
 		m.engine.Seek(m.engine.Cursor() + 1)
 
 	case "[":
-		m.engine.Stop()
 		m.seekMeasure(-1)
 	case "]":
-		m.engine.Stop()
 		m.seekMeasure(1)
-
-	case "+", "=":
-		m.setSpeed(m.engine.Speed + 0.05)
-	case "-", "_":
-		m.setSpeed(m.engine.Speed - 0.05)
-
-	case "b":
-		return m.ask(askingBpm, "beats per minute",
-			strconv.Itoa(int(math.Round(m.engine.Bpm()))))
-
-	case "c":
-		m.toggleClick()
-
-	case "d":
-		m.stepLevel()
 
 	// backspace is the way out of a song, the same as esc: the screen it goes
 	// back to is the list the song was opened from
@@ -401,69 +317,6 @@ func (m *Model) seekMeasure(step int) {
 	}
 
 	m.engine.SeekMeasure(target)
-}
-
-func (m *Model) setSpeed(speed float64) {
-	kept := m.engine.SetSpeed(speed)
-	m.cfg.Speed = kept
-	m.status = fmt.Sprintf("speed %.0f%%  ·  %.0f bpm", kept*100, m.engine.Bpm())
-	_ = m.cfg.Save()
-}
-
-// setBpm is the beat typed into the field. A song with a tempo of its own is
-// run by scaling that tempo, so asking for a beat and asking for a speed are
-// the same dial and the ends of the one are the ends of the other.
-func (m *Model) setBpm(text string) tea.Cmd {
-	if m.engine == nil {
-		return nil
-	}
-
-	asked, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
-	if err != nil || asked <= 0 {
-		m.fail = "a beat is a number, like 90"
-		return nil
-	}
-
-	kept := m.engine.SetBpm(asked)
-	m.cfg.Bpm, m.cfg.Speed = kept, m.engine.Speed
-	_ = m.cfg.Save()
-
-	m.status = fmt.Sprintf("%.0f bpm", kept)
-	if math.Abs(kept-asked) > 0.5 {
-		m.status = fmt.Sprintf("%.0f bpm, which is as far as this song runs", kept)
-	}
-	return nil
-}
-
-// toggleClick turns the metronome on and off. It is heard as well as seen, and
-// the input is open while it counts, which is why it is off until it is asked
-// for and why the tracker stays deaf to the tone it uses.
-func (m *Model) toggleClick() {
-	if m.engine.ClickOn() {
-		m.engine.StopClick()
-		m.cfg.Click = false
-		m.status = "the click is off"
-	} else {
-		m.engine.StartClick(time.Now())
-		m.cfg.Click = true
-		m.status = fmt.Sprintf("the click counts %.0f bpm", m.engine.Bpm())
-	}
-	_ = m.cfg.Save()
-}
-
-// stepLevel walks up the ladder and round to the bottom again. There are three
-// rungs, and a key that only ever goes up is a key that stops working.
-func (m *Model) stepLevel() {
-	next := song.Levels[(int(m.engine.Level())+1)%len(song.Levels)]
-	m.engine.SetLevel(next)
-
-	// the tab is laid out from the events, and what a level takes off a note
-	// is what the tab was drawing beside the fret
-	m.tab = song.NewTab(m.current, m.engine.Events)
-
-	m.cfg.Level = next.String()
-	_ = m.cfg.Save()
-	m.status = "asking for the " + next.String() + " of it"
 }
 
 func (m *Model) keyConfig(key string) tea.Cmd {

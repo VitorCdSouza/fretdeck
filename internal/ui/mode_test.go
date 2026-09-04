@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/VitorCdSouza/fretdeck/internal/practice"
 )
 
 // press is one key the way the terminal sends it.
@@ -16,6 +14,8 @@ func press(m *Model, key string) {
 		m.key(tea.KeyMsg{Type: tea.KeyEsc})
 	case "space":
 		m.key(tea.KeyMsg{Type: tea.KeySpace})
+	case "enter":
+		m.key(tea.KeyMsg{Type: tea.KeyEnter})
 	default:
 		m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 	}
@@ -118,18 +118,15 @@ func TestRPicksAPassageToRepeat(t *testing.T) {
 	}
 }
 
-// TestSpaceStillRunsTheClockInTheNormalMode is the promise the modes make: a
-// key means what it always meant until a mode is turned on.
-func TestSpaceStillRunsTheClockInTheNormalMode(t *testing.T) {
+// TestSpaceDoesNothingOutsideTheRepeatMode is the promise the modes make: a
+// key means what it always meant until a mode is turned on, and outside the
+// repeat mode the space means nothing at all.
+func TestSpaceDoesNothingOutsideTheRepeatMode(t *testing.T) {
 	m := model(t)
 	m.screen = screenPractice
-	m.engine.Mode = practice.Tempo
 
 	press(m, "space")
 
-	if !m.engine.Running() {
-		t.Fatal("space in the normal mode did not start the clock")
-	}
 	if m.engine.Looping() {
 		t.Fatal("space in the normal mode picked a passage")
 	}
@@ -152,18 +149,5 @@ func TestLeavingThePracticeScreenLeavesTheRepeatMode(t *testing.T) {
 	// what was picked is kept: it is the passage being practised, not a mode
 	if !m.engine.Repeats(1) {
 		t.Fatal("walking off the screen let the passage go")
-	}
-}
-
-// TestStartOverIsTheShiftedKeyNow is the one key the repeat mode moved.
-func TestStartOverIsTheShiftedKeyNow(t *testing.T) {
-	m := model(t)
-	m.screen = screenPractice
-	m.engine.Seek(2)
-
-	press(m, "R")
-
-	if m.engine.Cursor() != 0 {
-		t.Fatalf("R did not start the song over, the cursor is at %d", m.engine.Cursor())
 	}
 }

@@ -69,8 +69,8 @@ func (m *Model) bindings() []binding {
 			}
 		}
 		return []binding{
-			{"j k", "up/down"},
-			{"enter", "open the versions, or read one in"},
+			{"j k", "up/down, and the field over the first row"},
+			{"enter", "type in the field, or open the row"},
 			{"h", "close the versions, or back to what was played"},
 			{"i", "search again"},
 			{"d", "remove"},
@@ -80,17 +80,9 @@ func (m *Model) bindings() []binding {
 
 	case screenPractice:
 		return []binding{
-			{"v", "tab or highway"},
-			{"space", "run the clock"},
-			{"m", "wait or tempo"},
 			{"h l", "note"},
 			{"[ ]", "measure"},
-			{"+ -", "speed"},
-			{"b", "beats per minute"},
-			{"c", "the click on or off"},
-			{"d", "how much of it to ask for"},
 			{"r", "repeat a passage"},
-			{"R", "start over"},
 			{"esc bksp", "back to the songs"},
 		}
 
@@ -148,6 +140,22 @@ func (m *Model) bindings() []binding {
 // The bar is the question mark and nothing else now: a screen with a dozen
 // keys said them in a line and a half of chips, and a line and a half of the
 // window is worth more than a map that is behind one key anyway.
+// rowActions is what the row under the cursor offers, drawn in the bar beside
+// the key map. It is the row and not the screen: a screen's whole map is
+// behind the question mark, and the bar carries what the thing being looked at
+// can be done to.
+func (m *Model) rowActions() []binding {
+	if m.input.Focused() || m.removing || m.helping {
+		return nil
+	}
+
+	if m.screen == screenMusic && m.focus == paneRecent && m.musicCursor() < len(m.kept) {
+		return []binding{{"d", "delete music"}}
+	}
+
+	return nil
+}
+
 func chip(item binding) string {
 	return styleAccent.Render(keyLabel(item.keys)) + " " + styleFaint.Render(item.what)
 }

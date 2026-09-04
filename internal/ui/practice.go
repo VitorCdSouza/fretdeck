@@ -2,16 +2,19 @@ package ui
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/VitorCdSouza/fretdeck/internal/practice"
 	"github.com/VitorCdSouza/fretdeck/internal/song"
 )
+
+// The practice screen is the tab and the cursor on it, and nothing else. What
+// moves the cursor is a key or the note being played right; what the screen
+// says besides the tab is which measure is under the cursor and which measures
+// are being repeated.
 
 // tabIndent is the room the string letter takes at the left of every line, so
 // the marker over the tab lines up with the column under it.
@@ -23,15 +26,6 @@ func (m *Model) viewPractice() string {
 	}
 
 	lines := []string{"", m.practiceHead(), ""}
-
-	if m.highway {
-		// the board takes what is left after the head, the callout and the
-		// progress line, since a taller board is a longer warning
-		lines = append(lines, m.viewHighway(m.space()-len(lines)-5)...)
-		lines = append(lines, "", m.callout()+m.highwayFoot())
-		filler := m.space() - len(lines) - 1
-		return strings.Join(lines, "\n") + blank(filler) + "\n" + m.progressLine()
-	}
 
 	width := m.width - tabIndent - 2
 	if width < 10 {
@@ -49,21 +43,7 @@ func (m *Model) viewPractice() string {
 		lines = append(lines, band)
 	}
 
-	lines = append(lines, "", m.callout())
-
-	// the neck only goes on the screen when there is room for all of it. half
-	// a neck is worse than none, since the fret it is missing is the one being
-	// asked for
-	if event, playing := m.engine.Current(); playing && m.space() >= len(lines)+11 {
-		lines = append(lines, "")
-		lines = append(lines, m.fretboard(event, m.current.Tuning)...)
-	}
-
-	// the progress line is pinned to the bottom of the body instead of
-	// floating under the tab, so the block above it does not move when the
-	// callout grows a second line
-	filler := m.space() - len(lines) - 1
-	return strings.Join(lines, "\n") + blank(filler) + "\n" + m.progressLine()
+	return strings.Join(lines, "\n") + blank(m.space()-len(lines))
 }
 
 func (m *Model) practiceHead() string {
@@ -72,65 +52,12 @@ func (m *Model) practiceHead() string {
 		title += styleFaint.Render("  ·  ") + styleSubtle.Render(m.current.Track)
 	}
 
-	view := styleFaint.Render("tab")
-	if m.highway {
-		view = styleFaint.Render("highway")
-	}
-
-	mode := view + styleFaint.Render("   ") + styleAccent.Render(m.engine.Mode.String())
-	if m.current.Untimed {
-		mode = view + styleFaint.Render("   ") + styleFaint.Render("no rhythm")
-	}
-	if m.engine.Mode == practice.Tempo {
-		mode += styleFaint.Render(fmt.Sprintf("  %.0f%%", m.engine.Speed*100))
-	}
-
-	score := m.engine.Score()
-	accuracy := styleFaint.Render("—")
-	if score.Total > 0 {
-		style := styleOk
-		switch {
-		case score.Accuracy < 0.6:
-			style = styleBad
-		case score.Accuracy < 0.85:
-			style = styleWarn
-		}
-		accuracy = style.Render(fmt.Sprintf("%3.0f%%", score.Accuracy*100))
-	}
-
-	measure := styleSubtle.Render(fmt.Sprintf("measure %d", m.measure()))
-	if m.engine.Repeats(m.measure()) {
-		measure = styleAccent.Render(fmt.Sprintf("measure %d", m.measure()))
-	}
-
-	parts := []string{mode}
-	if beat := m.beatHead(); beat != "" {
-		parts = append(parts, beat)
-	}
-	parts = append(parts, styleFaint.Render(m.engine.Level().String()))
-	if repeat := m.repeatHead(); repeat != "" {
-		parts = append(parts, repeat)
-	}
-	parts = append(parts, measure, accuracy)
-
-	right := strings.Join(parts, styleFaint.Render("   "))
+	// the number over the bar line says which measure the cursor is in, so a
+	// second one in the corner is the same answer twice
+	right := m.repeatHead()
 	left := truncate("  "+title, m.width-lipgloss.Width(right)-2)
 
 	return pad(left, right, m.width)
-}
-
-// beatHead is the beat being counted, and it is only on the screen where there
-// is one: a tab with no rhythm and no click is played to nothing at all.
-func (m *Model) beatHead() string {
-	if m.engine.Mode != practice.Tempo && !m.engine.ClickOn() {
-		return ""
-	}
-
-	text := fmt.Sprintf("%.0f bpm", m.engine.Bpm())
-	if m.engine.ClickOn() {
-		return styleAccent.Render(text)
-	}
-	return styleFaint.Render(text)
 }
 
 // repeatHead is what the passage being looped over is called, and the number
@@ -156,7 +83,7 @@ func (m *Model) repeatHead() string {
 // once instead of the next time the song runs off its end.
 func (m *Model) pickRepeat() {
 	m.engine.ToggleRepeat(m.measure())
-	m.engine.Loop(time.Now())
+	m.engine.Loop()
 
 	if !m.engine.Looping() {
 		m.status = "nothing is being repeated"
@@ -243,7 +170,7 @@ func (m *Model) marker(view song.View) string {
 // is answered at the left edge without counting lines across the screen.
 func (m *Model) tabRow(row song.Row) string {
 	here := styleTabHere
-	if !m.engine.Done() && m.engine.Result(m.engine.Cursor()).Verdict == practice.Wrong {
+	if !m.engine.Empty() && m.engine.Result(m.engine.Cursor()).Verdict == practice.Wrong {
 		here = styleBad
 	}
 
@@ -254,141 +181,4 @@ func (m *Model) tabRow(row song.Row) string {
 
 	return "  " + label + "  " +
 		styleTabPast.Render(row.Before) + here.Render(row.At) + styleTabNext.Render(row.After)
-}
-
-// callout is the line that tells you what to play and what you played. It is
-// the only part of the screen somebody looks at while their hands are busy, so
-// it says the note by name and by where it is on the neck.
-func (m *Model) callout() string {
-	// the app has one text field and it is drawn where it was opened. asking
-	// for a beat here and typing it into the music screen would be typing into
-	// a line nobody on this screen can see
-	if m.input.Focused() {
-		return styleAccent.Render("  ▸") + m.input.View()
-	}
-
-	if m.engine.Done() {
-		score := m.engine.Score()
-		return "  " + styleOk.Render("done") + styleFaint.Render("   ") +
-			styleSubtle.Render(fmt.Sprintf("%d of %d right", score.Hits, score.Total))
-	}
-
-	if countIn := m.engine.CountIn(time.Now()); countIn > 0 {
-		return "  " + styleAccent.Render(fmt.Sprintf("starting in %.0f", countIn.Seconds()+0.99))
-	}
-
-	event, _ := m.engine.Current()
-	left := "  " + styleFaint.Render("play  ") + styleAccent.Render(chordName(event)) +
-		styleFaint.Render("   ") + styleSubtle.Render(where(event))
-
-	if m.heard.Name == "" || time.Since(m.silence) > 3*time.Second {
-		return left
-	}
-
-	verdict := m.engine.Result(m.engine.Cursor())
-	right := styleFaint.Render("heard  ")
-	switch verdict.Verdict {
-	case practice.Wrong:
-		right += styleBad.Render(m.heard.Name + "  ✗")
-	default:
-		right += styleSubtle.Render(m.heard.Name)
-	}
-
-	// the note just before the cursor is the one that was accepted, and saying
-	// so is the only confirmation the tempo mode gives while it runs
-	if m.engine.Cursor() > 0 && m.engine.Result(m.engine.Cursor()-1).Verdict == practice.Hit {
-		right = styleFaint.Render("heard  ") + styleOk.Render(m.heard.Name+"  ✓")
-	}
-
-	return pad(left, right+"  ", m.width)
-}
-
-func (m *Model) progressLine() string {
-	metronome := m.metronome()
-	width := m.width - 4 - lipgloss.Width(metronome)
-
-	return "  " + metronome + bar(m.engine.Progress(), width, styleAccent)
-}
-
-// metronome counts the bar on the screen, and out loud as well when the click
-// was asked for. The count is always drawn: the input is open while it sounds,
-// so the click is off until somebody turns it on and the dots are what is left
-// for the eye when it is.
-func (m *Model) metronome() string {
-	running := m.engine.Mode == practice.Tempo && m.engine.Running()
-	if !running && !m.engine.ClickOn() {
-		return ""
-	}
-
-	now := time.Now()
-	pulse, count := m.engine.ClickPulse(now)
-	counting := m.engine.CountIn(now) > 0
-
-	dots := make([]string, count)
-	for index := range dots {
-		switch {
-		case counting:
-			dots[index] = styleFaint.Render("○")
-		case index == pulse:
-			dots[index] = styleAccent.Render("●")
-		default:
-			dots[index] = styleFaint.Render("○")
-		}
-	}
-
-	return strings.Join(dots, " ") + "   "
-}
-
-// sounding is the notes of an event from the lowest up. They arrive in the
-// order the file wrote them, which is neither the order the strings are in nor
-// the order somebody would call them out.
-func sounding(event song.Event) []song.Note {
-	notes := append([]song.Note(nil), event.Notes...)
-	sort.SliceStable(notes, func(a, b int) bool { return notes[a].Midi < notes[b].Midi })
-	return notes
-}
-
-// chordName is what to call the event out loud. One note is its name, two are
-// both names, and anything thicker is the lowest note and how many ring over
-// it. The count says "notes" because a bare +2 beside a note name reads as two
-// semitones.
-func chordName(event song.Event) string {
-	notes := sounding(event)
-	switch len(notes) {
-	case 0:
-		return ""
-	case 1:
-		return song.NoteName(notes[0].Midi)
-	case 2:
-		return song.NoteName(notes[0].Midi) + " " + song.NoteName(notes[1].Midi)
-	}
-
-	return fmt.Sprintf("%s +%d notes", song.NoteName(notes[0].Midi), len(notes)-1)
-}
-
-// where says the position on the neck, which is the part somebody with a
-// guitar in their hands can act on without translating anything. It runs from
-// the lowest note up, in the order the names beside it are written.
-func where(event song.Event) string {
-	notes := sounding(event)
-	parts := make([]string, 0, len(notes))
-	for _, note := range notes {
-		// the technique is the half of it the fret number cannot say, and it is
-		// only there when the level asks for it
-		how := ""
-		if note.Technique != "" {
-			how = " " + string(note.Technique)
-		}
-
-		if note.Fret == 0 {
-			parts = append(parts, fmt.Sprintf("string %d open%s", note.String, how))
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("string %d fret %d%s", note.String, note.Fret, how))
-	}
-
-	if len(parts) > 3 {
-		return strings.Join(parts[:3], " · ") + " …"
-	}
-	return strings.Join(parts, " · ")
 }
