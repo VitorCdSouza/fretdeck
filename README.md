@@ -9,7 +9,7 @@ A terminal app for practicing guitar. It displays the tab of a song, listens to 
 - **Search & Download**: Queries Ultimate Guitar or Cifra Club, whichever the config screen names, directly from the terminal. Press `Enter` to download and save the tab as JSON in your local library. The tuning comes with it.
 - **Difficulty Ratings**: Fetches track difficulty from Songsterr automatically for search results and playlists.
 - **Spotify Integration**: Import playlists or liked songs. Automatically sorts tracks by difficulty for your selected instrument.
-- **Tuner**: Built-in tuner with visual needle indication.
+- **Tuner**: The last section of the config screen, with the deviation drawn as a needle rather than a number, so it is clear which way the peg turns.
 - **Recent Songs**: Opens your most recently played songs by default.
 
 ## Installation

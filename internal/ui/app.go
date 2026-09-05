@@ -27,17 +27,16 @@ const (
 	screenMusic screen = iota
 	screenPractice
 	screenSpotify
-	screenTuner
 	screenConfig
 )
 
-var screenNames = []string{"music", "practice", "spotify", "tuner", "config"}
+var screenNames = []string{"music", "practice", "spotify", "config"}
 
 // tabScreens is what the navigation line has a button for. The practice screen
 // is not one of them: it is a song open on the music screen, reached by opening
 // a song and left with esc or backspace, so it is drawn as that screen and the
 // line stays as short as the number of places there are to walk to.
-var tabScreens = []screen{screenMusic, screenSpotify, screenTuner, screenConfig}
+var tabScreens = []screen{screenMusic, screenSpotify, screenConfig}
 
 // headerLines is the name, the two rows a button takes and the rule under
 // them. A click is answered by counting from it, so it is a constant and not a
@@ -747,8 +746,6 @@ func (m *Model) View() string {
 		body = m.viewSpotify()
 	case screenPractice:
 		body = m.viewPractice()
-	case screenTuner:
-		body = m.viewTuner()
 	case screenConfig:
 		body = m.viewConfig()
 	}

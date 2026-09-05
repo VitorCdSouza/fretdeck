@@ -365,7 +365,11 @@ func TestTheTunerOpensOnTheInstrumentWithNoSong(t *testing.T) {
 	m := model(t)
 	m.current, m.engine, m.tab = nil, nil, nil
 	m.cfg.Instrument = "bass"
-	m.screen = screenTuner
+	m.screen = screenConfig
+
+	// the meter is the last block on the screen and a short window keeps only
+	// its head, so the strings are asked of a window with room for them
+	m.height = 40
 
 	if got := len(m.instrument().Tuning); got != 4 {
 		t.Fatalf("a bass has four strings, the tuner was handed %d", got)
@@ -711,7 +715,7 @@ func TestLDoesNotOpenASongOnTheSearchScreen(t *testing.T) {
 // towards, so the two belong to the strip and not to the window.
 func TestTheNavigationLineSaysHowToMove(t *testing.T) {
 	m := model(t)
-	m.screen = screenTuner
+	m.screen = screenSpotify
 
 	lines := strings.Split(m.View(), "\n")
 	line := strings.TrimRight(stripAnsi(lines[tabTop]), " ")
@@ -893,27 +897,27 @@ func TestClickingAButtonOpensThatScreen(t *testing.T) {
 
 	// the border is drawn in runes wider than a byte, so the column is counted
 	line := stripAnsi(strings.Split(m.View(), "\n")[tabTop])
-	at := len([]rune(line[:strings.Index(line, "tuner")]))
+	at := len([]rune(line[:strings.Index(line, "spotify")]))
 
 	// the bar under the name is the button as well, and so is the padding
 	for row := tabTop; row < tabTop+tabRows; row++ {
 		m.screen = screenMusic
 		m.mouse(click(at+1, row))
 
-		if m.screen != screenTuner {
-			t.Fatalf("clicking the tuner on row %d opened %s", row, screenNames[m.screen])
+		if m.screen != screenSpotify {
+			t.Fatalf("clicking spotify on row %d opened %s", row, screenNames[m.screen])
 		}
 	}
 
 	m.screen = screenMusic
 	m.mouse(click(at-1, tabTop))
-	if m.screen != screenTuner {
+	if m.screen != screenSpotify {
 		t.Fatalf("the padding of the button opened %s", screenNames[m.screen])
 	}
 
 	// what is between two buttons is no screen and opens nothing
 	m.mouse(click(0, tabTop))
-	if m.screen != screenTuner {
+	if m.screen != screenSpotify {
 		t.Fatalf("the left edge of the line is not a button, it opened %s", screenNames[m.screen])
 	}
 }

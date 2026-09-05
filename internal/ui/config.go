@@ -244,8 +244,8 @@ func (m *Model) viewConfig() string {
 		if m.first == firstRunInstrument {
 			lines = append(lines,
 				"",
-				"  "+styleSubtle.Render("Whichever one is plugged in. The tuner and the neck are drawn from"),
-				"  "+styleSubtle.Render("it while no song is open, and a search says which tabs are for it."),
+				"  "+styleSubtle.Render("Whichever one is plugged in. The tuner is drawn from it while no"),
+				"  "+styleSubtle.Render("song is open, and a search says which tabs are for it."),
 				"",
 				"  "+styleFaint.Render("A song brings its own tuning, so this is not asked about again."),
 				"  "+styleFaint.Render("The input is the other question, and then the app opens."),
@@ -267,8 +267,9 @@ func (m *Model) viewConfig() string {
 		if m.first == firstRunInput {
 			tail = 7
 		} else {
-			// the site list is under the inputs and the switch is under that
-			tail += 3 + len(tabsite.Sites)
+			// under the inputs are the site list, the switch and the head of
+			// the tuner, which keeps its meter only if the window has room
+			tail += 8 + len(tabsite.Sites)
 		}
 		lines = append(lines, m.deviceRows(headerLines+len(lines), m.space()-len(lines)-tail)...)
 
@@ -295,12 +296,16 @@ func (m *Model) viewConfig() string {
 		m.clicks = append(m.clicks, clickable{top: headerLines + len(lines),
 			first: m.configCount() - 1, count: 1})
 		lines = append(lines, m.mouseRow())
+
+		// the tuner is the last thing on the screen and the cursor walks past
+		// it: it is read and not answered, so it is a block and not a row
+		lines = append(lines, "", m.sectionHead("THE TUNER", m.tunerHead()))
+		lines = append(lines, m.tunerRows(m.space()-len(lines)-2)...)
 	}
 
 	lines = append(lines,
 		"",
 		"  "+styleFaint.Render("Songs are read from "+m.cfg.Library),
-		"  "+styleFaint.Render("A line in beats a microphone: it hears the guitar and not the room."),
 	)
 
 	return strings.Join(lines, "\n") + blank(m.space()-len(lines))

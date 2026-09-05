@@ -16,7 +16,16 @@ import (
 // with the tuning pegs rather than with the tuning.
 const inTune = 5.0
 
-func (m *Model) viewTuner() string {
+// tunerRows is the meter of the tuner, drawn under its head on the config
+// screen and given whatever room is left there. It has no keys and nothing to
+// answer, so it is the last block on a screen somebody is already on rather
+// than a screen of its own, and it gives its lines up from the bottom when the
+// window is too short for all of them.
+func (m *Model) tunerRows(room int) []string {
+	if room < 1 {
+		return nil
+	}
+
 	width := m.width - 8
 	if width > 61 {
 		width = 61
@@ -25,36 +34,43 @@ func (m *Model) viewTuner() string {
 		width = 21
 	}
 
-	quiet := m.level.Freq == 0 || time.Since(m.silence) > 3*time.Second
-	indent := strings.Repeat(" ", (m.width-width)/2)
+	quiet := m.quiet()
+	indent := strings.Repeat(" ", 3)
 
-	name, hertz := styleFaint.Render("—"), ""
-	if !quiet {
-		name = styleHeading.Render(m.level.Name)
-		hertz = styleSubtle.Render(fmt.Sprintf("%.2f Hz", m.level.Freq))
+	rows := []string{indent + m.needle(width, quiet)}
+	if room >= 3 {
+		rows = append(rows, indent+styleFaint.Render(scaleLabels(width)))
+	}
+	if room >= 4 {
+		rows = append(rows, "")
+	}
+	if room >= 2 {
+		rows = append(rows, indent+m.strings(width))
 	}
 
-	// the tuner has one thing on it and a screen to put it on, so it sits in
-	// the middle instead of hanging off the top edge
-	lines := []string{
-		"",
-		indent + pad(name, hertz, width),
-		"",
-		indent + m.needle(width, quiet),
-		indent + styleFaint.Render(scaleLabels(width)),
-		"",
-		indent + m.verdict(quiet),
-		"",
-		"",
-		indent + m.strings(width),
+	// the blank under the head is what every other section on that screen has,
+	// and it is the first line given up when the window is short
+	if room > len(rows) {
+		rows = append([]string{""}, rows...)
 	}
 
-	lead := (m.space() - len(lines)) / 2
-	if lead < 1 {
-		lead = 1
-	}
+	return rows
+}
 
-	return blank(lead) + strings.Join(lines, "\n") + blank(m.space()-len(lines)-lead)
+// tunerHead is what the section head carries on its right: the note being
+// heard, how far off it is and which way the peg turns. It is the whole of the
+// tuner on a window with no room for the meter under it.
+func (m *Model) tunerHead() string {
+	if m.quiet() {
+		return "play one string on its own"
+	}
+	return fmt.Sprintf("%s  %.2f Hz   %s", m.level.Name, m.level.Freq, m.reading())
+}
+
+// quiet is a room with nothing being played in it, which is what the tuner
+// opens on and goes back to.
+func (m *Model) quiet() bool {
+	return m.level.Freq == 0 || time.Since(m.silence) > 3*time.Second
 }
 
 // needle draws the deviation as a position on a line, because a number alone
@@ -103,17 +119,28 @@ func (m *Model) verdict(quiet bool) string {
 		return styleFaint.Render("play one string on its own")
 	}
 
-	cents := m.level.Cents
-	if math.Abs(cents) <= inTune {
-		return styleOk.Render("✓  in tune")
+	if math.Abs(m.level.Cents) <= inTune {
+		return styleOk.Render("\u2713  in tune")
 	}
 
-	direction := "sharp, tune down"
-	if cents < 0 {
-		direction = "flat, tune up"
-	}
+	return styleWarn.Render(fmt.Sprintf("%+.0f cents", m.level.Cents)) +
+		styleSubtle.Render("  "+m.turn())
+}
 
-	return styleWarn.Render(fmt.Sprintf("%+.0f cents", cents)) + styleSubtle.Render("  "+direction)
+// reading is the verdict in one phrase, for the head of the section.
+func (m *Model) reading() string {
+	if math.Abs(m.level.Cents) <= inTune {
+		return "\u2713 in tune"
+	}
+	return fmt.Sprintf("%+.0f cents, %s", m.level.Cents, m.turn())
+}
+
+// turn is which way the peg goes, since a number of cents alone does not say.
+func (m *Model) turn() string {
+	if m.level.Cents < 0 {
+		return "flat, tune up"
+	}
+	return "sharp, tune down"
 }
 
 // strings is the row of open notes of whatever is loaded, with the one being
@@ -127,7 +154,7 @@ func (m *Model) strings(width int) string {
 	}
 
 	nearest, best := -1, 4
-	if m.level.Freq > 0 && time.Since(m.silence) < 3*time.Second {
+	if !m.quiet() {
 		for index, str := range tuning {
 			if distance := abs(str.Midi - m.level.Midi); distance < best {
 				nearest, best = index, distance

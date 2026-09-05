@@ -106,9 +106,6 @@ func (m *Model) bindings() []binding {
 			{"g G", "first/last"},
 		}
 
-	case screenTuner:
-		return []binding{{"", "play one string on its own"}}
-
 	case screenConfig:
 		if m.first == firstRunInstrument {
 			return []binding{
