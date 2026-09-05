@@ -221,7 +221,11 @@ def contents(session, playlist):
     if playlist == LIKED:
         return liked(session)
 
-    content = session.api().get_playlist(PlaylistId.from_base62(playlist))
+    # PlaylistId only knows how to read a uri, and from_base62 is the one the
+    # base class leaves unimplemented
+    content = session.api().get_playlist(
+        PlaylistId.from_uri("spotify:playlist:%s" % playlist)
+    )
 
     return [
         item.uri
