@@ -13,7 +13,6 @@ import threading
 import webbrowser
 
 from librespot.core import MercuryRequests, OAuth, Session
-from librespot.mercury import RawMercuryRequest
 from librespot.metadata import PlaylistId, TrackId
 from librespot.proto import ExtensionKind_pb2 as kinds
 from librespot.proto import Playlist4External_pb2 as playlist4
@@ -197,15 +196,16 @@ def playlists(session):
 
 def liked(session):
     """the track uris of the collection, which is what spotify calls the likes."""
-    answer = session.mercury().send_sync(
-        RawMercuryRequest.get(
-            "hm://collection/collection/%s?allowonlytracks=true&complete=true"
-            % session.username()
-        )
+    answer = session.api().send(
+        "GET",
+        "/collection/collection/%s?allowonlytracks=true&complete=true"
+        % session.username(),
+        None,
+        None,
     )
 
     uris = []
-    for number, item in walk(answer.payload):
+    for number, item in walk(answer.content):
         if number != 1 or not isinstance(item, bytes):
             continue
         # every item of the collection carries the id of the track in its second
@@ -283,8 +283,10 @@ def main():
         emit("spotify_error", "not logged in yet, the spotify screen has the button")
         return 1
     except Exception as error:
-        # the name of the class carries half of what librespot says went wrong
-        emit("spotify_error", "%s: %s" % (type(error).__name__, error))
+        # librespot raises IOError with nothing in it, so the class is the whole
+        # of what there is to say when str of it is empty
+        said = str(error) or repr(error.args or "")
+        emit("spotify_error", ("%s: %s" % (type(error).__name__, said)).strip())
         return 1
 
 
