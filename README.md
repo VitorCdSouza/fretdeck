@@ -6,9 +6,10 @@ A terminal app for practicing guitar. It displays the tab of a song, listens to 
 
 - **Practice**: The cursor holds on a note until you play it right, then moves on. There is no clock: `h` and `l` walk a note at a time, `[` and `]` a measure at a time.
 - **Looping**: Press `r` on the practice screen, use `Space` to select measures, and loop specific sections.
+- **Metronome**: A screen of its own with the beat and the bar on it, counting out of the speakers while the microphone stays open, because the tone it counts with is one no string is ever tuned to.
 - **Search & Download**: Queries Ultimate Guitar or Cifra Club, whichever the config screen names, directly from the terminal. Press `Enter` to download and save the tab as JSON in your local library. The tuning comes with it.
-- **Difficulty Ratings**: Fetches track difficulty from Songsterr automatically for search results and playlists.
-- **Spotify Integration**: Import playlists or liked songs. Automatically sorts tracks by difficulty for your selected instrument.
+- **Difficulty Ratings**: Whatever the site the search went to says about a transcription, in its own words, and nothing at all where it says nothing.
+- **Spotify Integration**: Import playlists or liked songs, and search for a tab of one without leaving the app.
 - **Tuner**: The last section of the config screen, with the deviation drawn as a needle rather than a number, so it is clear which way the peg turns.
 - **Recent Songs**: Opens your most recently played songs by default.
 
@@ -67,12 +68,18 @@ Press `i` on the screen the app opens on, type an artist and a song, and `enter`
 
 The bottom half of the screen is the tab of the row the cursor is on, so a transcription can be read before it is kept.
 
+## The metronome
+
+The metronome screen is the beat, how many beats are in the bar, and the switch between the two of them and silence. `space` starts the count and stops it from any row, `h` and `l` are less and more of the row the cursor is on, and `[` and `]` move the beat by ten. It keeps counting on the other screens, which is what practising to it is, and the numbers are kept between runs while the count itself is not.
+
+It is the one thing here that makes a sound, and the tone is the whole of what lets it. It sits half a semitone off the grid a fretboard is written on and above the highest note the detector names, so what it can be mistaken for are pitches no string is ever tuned to, and the tracker stays deaf to exactly those for as long as the click is sounding. Nothing is drawn beating on the screen: a second count would disagree with the one being heard inside a bar, and the wrong one is the one nobody can tell from the right one.
+
 ## Spotify
 
-The spotify screen logs in with a username and a password and lists the playlists on the account, plus the liked songs. Opening one looks every track up on Songsterr and sorts it by difficulty, three lookups at a time, so a playlist can be read from the easiest song in it. Nothing is streamed and nothing is played: the tabs are what is being looked for.
+The spotify screen logs in with a username and a password and lists the playlists on the account, plus the liked songs. Opening one lists its tracks in the order the account keeps them, and `enter` on a track searches the tab site for it. Nothing is streamed and nothing is played: the tabs are what is being looked for.
 
 ## Notes
 
-The app listens and never makes a sound. A note out of the speakers would be heard as a note that was played, so there is no playback, no metronome and no click.
+The metronome is the one thing here that makes a sound, and it pays for it with a tone the detector cannot mistake for a string and a tracker deaf to that tone while it sounds. Nothing else does: there is no playback of a song, since a note out of the speakers would be heard as a note that was played.
 
 A chord counts as played when any of its notes is heard, since the detector reports one pitch at a time. The low strings are allowed to read an octave high for the same reason: the fundamental of a wound string is quieter than its second harmonic, and failing that would fail somebody playing correctly.

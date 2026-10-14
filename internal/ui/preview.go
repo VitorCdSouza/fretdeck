@@ -73,7 +73,9 @@ func (m *Model) previewOf() (finding, bool) {
 	if m.screen != screenMusic {
 		return finding{}, false
 	}
-	if m.found >= len(m.results) {
+	// the cursor sits on the search field at fieldRow, which is above the
+	// first row and is no row at all
+	if m.found < 0 || m.found >= len(m.results) {
 		return finding{}, false
 	}
 
@@ -99,6 +101,35 @@ func (m *Model) read(msg pageMsg) {
 		kept = &page{fail: msg.err.Error()}
 	}
 	m.pages[msg.url] = kept
+
+	if msg.tab != nil {
+		m.levelled(msg.url, msg.tab.Level)
+	}
+}
+
+// levelled writes the difficulty of a page onto the row that names it. Most
+// rows of a search come back without one and the page carries it, and the
+// preview has read the page anyway.
+func (m *Model) levelled(address, level string) {
+	if level == "" {
+		return
+	}
+
+	for index := range m.results {
+		if m.results[index].URL == address {
+			m.results[index].Level = level
+		}
+	}
+
+	// the versions held aside are what an opened row is drawn from, so a row
+	// that is closed and opened again would lose it
+	for key, versions := range m.groups {
+		for index := range versions {
+			if versions[index].URL == address {
+				m.groups[key][index].Level = level
+			}
+		}
+	}
 }
 
 // viewPreview is the pane itself, and nothing at all when there is no row to

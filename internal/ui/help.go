@@ -86,6 +86,14 @@ func (m *Model) bindings() []binding {
 			{"esc bksp", "back to the songs"},
 		}
 
+	case screenMetronome:
+		return []binding{
+			{"space", "start the click, or stop it"},
+			{"j k", "up/down"},
+			{"h l", "less/more, and off/on on the click"},
+			{"[ ]", "the beat by ten"},
+		}
+
 	case screenSpotify:
 		switch m.stage {
 		case stageLogin:

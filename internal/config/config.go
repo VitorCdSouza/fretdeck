@@ -43,7 +43,27 @@ type Config struct {
 	// Mouse says whether the app asks the terminal for mouse events. It is on
 	// unless it was turned off, and turning it off gives text selection back
 	Mouse bool `json:"mouse"`
+
+	// Bpm and Beats are what the metronome was left set to. The click itself
+	// is not kept: a run that opens counting into a room nobody is in is a run
+	// somebody has to turn off before anything else
+	Bpm   float64 `json:"bpm"`
+	Beats int     `json:"beats"`
 }
+
+// The ends of the beat somebody can practise to. Under thirty the bar is too
+// long to feel and over three hundred the click is a tone rather than a count.
+const (
+	MinBpm = 30.0
+	MaxBpm = 300.0
+)
+
+// The ends of the bar. One is a click with no accent in it, and a bar nobody
+// can hear the start of is what more than twelve beats is.
+const (
+	MinBeats = 1
+	MaxBeats = 12
+)
 
 // Answered is whether the first run has both of its answers. One that was
 // kept is not asked about again, which is the whole point of keeping it.
@@ -86,6 +106,8 @@ func defaults() Config {
 		Library: library,
 		Site:    tabsite.Ultimate,
 		Mouse:   true,
+		Bpm:     90,
+		Beats:   4,
 	}
 }
 
@@ -114,6 +136,13 @@ func Load() Config {
 	// a config is a file and a file can name a site that is not read here
 	if !tabsite.Known(loaded.Site) {
 		loaded.Site = defaults().Site
+	}
+	// a file can carry a beat nothing here would let anybody ask for
+	if loaded.Bpm < MinBpm || loaded.Bpm > MaxBpm {
+		loaded.Bpm = defaults().Bpm
+	}
+	if loaded.Beats < MinBeats || loaded.Beats > MaxBeats {
+		loaded.Beats = defaults().Beats
 	}
 	return loaded
 }

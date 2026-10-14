@@ -163,7 +163,6 @@ func (m *Model) keepConfig() tea.Cmd {
 			m.fail = err.Error()
 			return nil
 		}
-		m.songsterr.Family = m.family()
 		m.status = chosen.Name + ", tuned " + chosen.Written()
 
 		if m.first == firstRunInstrument {
@@ -171,8 +170,7 @@ func (m *Model) keepConfig() tea.Cmd {
 			m.startingRow()
 		}
 
-		// the difficulty on a playlist is that of the instrument being played
-		return m.lookupAgain()
+		return nil
 
 	case configInput:
 		chosen := m.devices[at]

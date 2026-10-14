@@ -101,6 +101,8 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 		return m.keySpotify(key)
 	case screenPractice:
 		return m.keyPractice(key)
+	case screenMetronome:
+		return m.keyMetronome(key)
 	case screenConfig:
 		return m.keyConfig(key)
 	}
@@ -118,6 +120,8 @@ func (m *Model) move(delta int) {
 		m.picked = clamp(m.picked+delta, m.spotifyRows())
 	case screenConfig:
 		m.configRow = clamp(m.configRow+delta, m.configCount())
+	case screenMetronome:
+		m.metro = clamp(m.metro+delta, metroRows)
 	case screenPractice:
 		if m.engine == nil {
 			return
@@ -138,6 +142,8 @@ func (m *Model) jump(direction int) {
 		last = m.spotifyRows() - 1
 	case screenConfig:
 		last = m.configCount() - 1
+	case screenMetronome:
+		last = metroRows - 1
 	case screenPractice:
 		if m.engine == nil {
 			return
@@ -166,6 +172,8 @@ func (m *Model) jump(direction int) {
 		m.picked = target
 	case screenConfig:
 		m.configRow = target
+	case screenMetronome:
+		m.metro = target
 	}
 }
 

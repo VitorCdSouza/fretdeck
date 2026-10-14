@@ -3,19 +3,18 @@ package ui
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/VitorCdSouza/fretdeck/internal/songsterr"
+	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
 // The spotify screen is one question at a time. Logged out it is a single
 // button, since there is nothing else that can be done about it; logged in it
-// is the playlists, and a playlist opened is its songs sorted by how hard
-// songsterr says they are on the instrument the config screen was told about.
+// is the playlists, and a playlist opened is its songs in the order the
+// account keeps them.
 //
 // Nothing is read in from here. A track carries an artist and a title and no
 // tab at all, so enter on one is the search on the music screen, which is the
@@ -124,9 +123,9 @@ func (m *Model) spotify(action string, args ...string) tea.Cmd {
 	return m.run("spotify.py", append([]string{action, "--credentials", path}, args...)...)
 }
 
-// showTracks turns a playlist into rows and sends every one of them off to be
-// looked up. Nothing is known about the difficulty until songsterr answers,
-// and the sort waits for the lot, since half a list is not an order.
+// showTracks turns a playlist into rows. A track is an artist and a title and
+// nothing else: the difficulty is the tab site's and there is no tab here yet,
+// so the row says nothing about one until the song is searched for.
 func (m *Model) showTracks(tracks []spotifyTrack) tea.Cmd {
 	m.pulling = false
 	m.tracks = make([]finding, 0, len(tracks))
@@ -136,44 +135,15 @@ func (m *Model) showTracks(tracks []spotifyTrack) tea.Cmd {
 			From:   sourceTracks,
 			Artist: track.Artist,
 			Title:  track.Title,
-			Key:    songsterr.Key(track.Artist, track.Title),
-			State:  lookupWaiting,
+			Key:    tabsite.Key(track.Artist, track.Title),
 			Path:   m.owned(track.Artist, track.Title),
 		})
 	}
 
 	m.picked = 0
-	m.status = fmt.Sprintf("looking %d up for the %s", len(tracks), m.instrument().Name)
+	m.status = ""
 
-	return m.lookupSongs(m.tracks)
-}
-
-// sortByLevel puts the easy songs at the top, which is the question somebody
-// brings a playlist here to ask. What was not found sinks to the bottom.
-func (m *Model) sortByLevel() {
-	sort.SliceStable(m.tracks, func(i, j int) bool {
-		left, right := m.tracks[i], m.tracks[j]
-		if (left.State == lookupDone) != (right.State == lookupDone) {
-			return left.State == lookupDone
-		}
-		return left.Level < right.Level
-	})
-}
-
-// lookupAgain asks about a playlist that is already on the screen. The number
-// beside a row is the difficulty of the instrument being played, so changing
-// the instrument changes every one of them and the order they are in.
-func (m *Model) lookupAgain() tea.Cmd {
-	if len(m.tracks) == 0 {
-		return nil
-	}
-
-	for index := range m.tracks {
-		m.tracks[index].State = lookupWaiting
-	}
-	m.status = "looking the playlist up again for the " + m.instrument().Name
-
-	return m.lookupSongs(m.tracks)
+	return nil
 }
 
 // markOwned says which rows of the playlist are songs that are here now. The

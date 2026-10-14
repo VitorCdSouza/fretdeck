@@ -14,7 +14,6 @@ import (
 	"github.com/VitorCdSouza/fretdeck/internal/cifraclub"
 	"github.com/VitorCdSouza/fretdeck/internal/config"
 	"github.com/VitorCdSouza/fretdeck/internal/song"
-	"github.com/VitorCdSouza/fretdeck/internal/songsterr"
 	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 	"github.com/VitorCdSouza/fretdeck/internal/ultimate"
 )
@@ -65,8 +64,9 @@ func siteName(address string) string {
 // The two are columns of the one screen and both are drawn the whole time, so
 // coming back to a song costs no keystroke. h and l walk between them.
 //
-// Songsterr is still here and is no longer a screen. What it answers is the
-// difficulty beside a row, looked up quietly behind the list.
+// The difficulty beside a row is the site's own word for it and nothing is
+// looked up anywhere else: a site that keeps none leaves the row saying
+// nothing, which is the same answer it gives about a version and a rating.
 
 // source says where a row came from. The three produce the same kind of row,
 // which is why they are drawn by the one function: a song, what a site says
@@ -101,11 +101,13 @@ type finding struct {
 	Artist string
 	Title  string
 
-	// Key is the artist and the title normalized, which is what a difficulty
-	// is looked up and remembered by
-	Key   string
-	Level int
-	State lookup
+	// Key is the artist and the title normalized, which is what tells one
+	// song of a list from the next however it was written
+	Key string
+
+	// Level is how hard the site that answered calls that transcription, in
+	// its own words, and empty wherever it says nothing
+	Level string
 
 	// URL is the page the tab is read from, and Path is where it was written
 	// when it is on disk. A row can have either, both or neither
@@ -150,14 +152,6 @@ func (f finding) entry() config.Entry {
 	}
 }
 
-type lookup int
-
-const (
-	lookupDone lookup = iota
-	lookupWaiting
-	lookupMissing
-)
-
 // searchMsg is a search, and grabMsg is one of its tabs read and written
 // into the library, which is the whole of that trip.
 type searchMsg struct {
@@ -174,14 +168,6 @@ type grabMsg struct {
 	notes    int
 	measures int
 	err      error
-}
-
-// lookupMsg is what songsterr says about one song, and it answers for every
-// row of that song.
-type lookupMsg struct {
-	key   string
-	level int
-	found bool
 }
 
 func (m *Model) searchSite(pattern string) tea.Cmd {
@@ -210,9 +196,9 @@ func (m *Model) showTabs(results []tabsite.Result) {
 			From:    sourceSearch,
 			Artist:  item.Artist,
 			Title:   item.Title,
-			Key:     songsterr.Key(item.Artist, item.Title),
-			State:   lookupWaiting,
+			Key:     tabsite.Key(item.Artist, item.Title),
 			Kind:    item.Kind,
+			Level:   item.Level,
 			Version: item.Version,
 			Rating:  item.Rating,
 			Votes:   item.Votes,
@@ -250,7 +236,7 @@ func (m *Model) showTabs(results []tabsite.Result) {
 // part of it: a bass transcription is not a version of the guitar one, it is
 // somebody else's part, and a chord sheet is neither.
 func groupOf(item tabsite.Result) string {
-	return songsterr.Key(item.Artist, item.Title) + " " + item.Kind
+	return tabsite.Key(item.Artist, item.Title) + " " + item.Kind
 }
 
 // prior and middling are what a rating is weighed against, so the versions of
@@ -271,8 +257,8 @@ func popularity(item finding) float64 {
 }
 
 // expand puts the versions of a group under its row, the best liked first, and
-// takes them away again. What songsterr said is the song's and not the
-// version's, so it is carried down rather than looked up a second time.
+// takes them away again. Each of them carries what the site said about it,
+// since a difficulty there is a transcription's and not a song's.
 func (m *Model) expand(index int) {
 	head := m.results[index]
 	if head.Open {
@@ -280,11 +266,7 @@ func (m *Model) expand(index int) {
 		return
 	}
 
-	rows := make([]finding, 0, head.Count)
-	for _, version := range m.groups[head.Group] {
-		version.State, version.Level = head.State, head.Level
-		rows = append(rows, version)
-	}
+	rows := append(make([]finding, 0, head.Count), m.groups[head.Group]...)
 
 	m.results[index].Open = true
 	m.results = append(m.results[:index+1], append(rows, m.results[index+1:]...)...)
@@ -355,7 +337,7 @@ func (m *Model) showRecent() {
 			From:    sourceRecent,
 			Artist:  entry.Artist,
 			Title:   entry.Title,
-			Key:     songsterr.Key(entry.Artist, entry.Title),
+			Key:     tabsite.Key(entry.Artist, entry.Title),
 			URL:     entry.URL,
 			Path:    m.onDisk(entry),
 			Version: entry.Version,
@@ -426,98 +408,6 @@ func (m *Model) owned(artist, title string) string {
 		}
 	}
 	return ""
-}
-
-// lookupSongs asks songsterr what it calls the difficulty of every distinct
-// song of a list. The list is handed in: the music screen and the spotify
-// screen keep one each, and either of them can be waiting on an answer.
-//
-// Per song and not per row: a search answers a dozen versions of the one song
-// and they all share the one answer. Three at a time and no more, because a
-// playlist is hundreds of songs and firing hundreds of requests at once is how
-// the search stops answering at all.
-func (m *Model) lookupSongs(items []finding) tea.Cmd {
-	type want struct {
-		key    string
-		artist string
-		title  string
-	}
-
-	var songs []want
-	seen := map[string]bool{}
-	for _, item := range items {
-		if item.State != lookupWaiting || seen[item.Key] {
-			continue
-		}
-		seen[item.Key] = true
-		songs = append(songs, want{key: item.Key, artist: item.Artist, title: item.Title})
-	}
-
-	client, family := m.songsterr, m.family()
-	out := m.lookups
-
-	return func() tea.Msg {
-		gate := make(chan struct{}, 3)
-		for _, asked := range songs {
-			gate <- struct{}{}
-			go func(asked want) {
-				defer func() { <-gate }()
-
-				found, err := client.Search(context.Background(), asked.artist+" "+asked.title)
-				if err != nil {
-					out <- lookupMsg{key: asked.key}
-					return
-				}
-
-				// the artist and the title both, or the answer is about a
-				// cover, a live version or another song by the same band
-				best, ok := songsterr.Best(found, asked.artist, asked.title)
-				if !ok {
-					out <- lookupMsg{key: asked.key}
-					return
-				}
-
-				out <- lookupMsg{key: asked.key, level: best.Difficulty(family), found: true}
-			}(asked)
-		}
-		return nil
-	}
-}
-
-func (m *Model) waitLookup() tea.Cmd {
-	return func() tea.Msg { return <-m.lookups }
-}
-
-// answered fills in what songsterr said about one song, on every row of it and
-// on both lists. A row is keyed by the artist and the title, so a song that is
-// on the playlist and in a search has the one answer either way.
-func (m *Model) answered(msg lookupMsg) {
-	answerRows(m.results, msg)
-	answerRows(m.tracks, msg)
-}
-
-func answerRows(items []finding, msg lookupMsg) {
-	for index := range items {
-		if items[index].Key != msg.key || items[index].State != lookupWaiting {
-			continue
-		}
-		items[index].State = lookupMissing
-		if msg.found {
-			items[index].State, items[index].Level = lookupDone, msg.level
-		}
-	}
-}
-
-func stillLooking(items []finding) int {
-	waiting := 0
-	for _, item := range items {
-		// a version of an opened song is the same song as the row above it and
-		// is answered by the same lookup, so counting it counts twice
-		if item.State == lookupWaiting && !item.under() {
-			waiting++
-		}
-	}
-	return waiting
 }
 
 // songsIn is how many songs a list holds, which is not how many rows it draws:
@@ -1024,10 +914,6 @@ func (m *Model) listColumn(lead []string, head, right string, items []finding,
 		return append(lead, "  "+styleSubtle.Render("Nothing came back for that."))
 	}
 
-	if waiting := stillLooking(items); waiting > 0 {
-		right = fmt.Sprintf("%s  \u00b7  %d still looking", right, waiting)
-	}
-
 	lines := append(lead, columnHead(head, right, width), "")
 
 	// the bottom of the column is the tab of the row under the cursor, and the
@@ -1150,9 +1036,9 @@ func (m *Model) saidAbout(item finding, paint rowPaint) string {
 
 	written := m.versionOf(item, paint)
 
-	// the difficulty is the song's and the row above carries it: printing it
-	// again on every version of it says nothing new
-	if item.under() {
+	// a site that keeps no difficulty leaves the row saying nothing about one,
+	// the way it says nothing about a version it does not number
+	if item.Level == "" {
 		return written
 	}
 
@@ -1160,31 +1046,21 @@ func (m *Model) saidAbout(item finding, paint rowPaint) string {
 		written += paint.of(styleFaint).Render("   ")
 	}
 
-	switch item.State {
-	case lookupWaiting:
-		return written + paint.of(styleFaint).Render("  ·  ")
-	case lookupMissing:
-		// songsterr matched no song of that artist and title, and a blank
-		// means not found rather than easy
-		if item.From == sourceTracks {
-			return paint.of(styleFaint).Render("no tab")
-		}
-		return written + paint.of(styleFaint).Render("     ")
-	}
+	return written + paint.of(levelStyle(item.Level)).Render(strings.ToLower(item.Level))
+}
 
-	if item.Level == 0 {
-		return written + paint.of(styleFaint).Render("no guitar")
+// levelStyle is the colour of a difficulty. The words are the site's, and one
+// nobody here has seen is drawn plainly rather than guessed at.
+func levelStyle(level string) lipgloss.Style {
+	switch strings.ToLower(level) {
+	case "novice":
+		return styleOk
+	case "intermediate":
+		return styleWarn
+	case "advanced":
+		return styleBad
 	}
-
-	style := styleOk
-	switch {
-	case item.Level >= 6:
-		style = styleBad
-	case item.Level >= 4:
-		style = styleWarn
-	}
-
-	return written + paint.of(style).Render(fmt.Sprintf("level %d", item.Level))
+	return styleSubtle
 }
 
 // versionOf is how one transcription is told from the next: a song there has a

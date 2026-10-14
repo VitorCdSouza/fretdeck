@@ -51,6 +51,10 @@ const (
 	EventStopped      = "stopped"
 	EventAudioWarning = "audio_warning"
 
+	// EventClickError is the metronome with nothing to play it on, which is
+	// the click not working and not the listening
+	EventClickError = "click_error"
+
 	EventTracks      = "tracks"
 	EventImported    = "imported"
 	EventImportError = "import_error"
@@ -74,6 +78,12 @@ type Command struct {
 	// Card is what that input is plugged into, which a profile change does not
 	// rename. It is what finds the input again when the name has changed
 	Card string `json:"card,omitempty"`
+
+	// Bpm and Beats are the metronome: the beat it counts and how many of them
+	// are in a bar. A bpm of nothing is what turns the click off, and the
+	// worker paces the beats itself from these two
+	Bpm   float64 `json:"bpm,omitempty"`
+	Beats int     `json:"beats,omitempty"`
 }
 
 // Decode reads the data of an event into v.

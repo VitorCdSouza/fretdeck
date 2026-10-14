@@ -100,6 +100,8 @@ func (m *Model) point(run clickable, row int) tea.Cmd {
 		m.setMusicCursor(row)
 	case screenConfig:
 		m.configRow = clamp(row, m.configCount())
+	case screenMetronome:
+		m.metro = clamp(row, metroRows)
 	case screenSpotify:
 		if !m.linked {
 			return m.login()

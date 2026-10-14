@@ -7,7 +7,10 @@
 // came from beyond what these two carry.
 package tabsite
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // the names the sites give the things they call a tab. Only the first two have
 // frets in them: chords is a chord sheet, and what a site sells is a binary it
@@ -61,6 +64,34 @@ func Known(name string) bool {
 	return false
 }
 
+// Key is the one name two catalogues agree on for a song, and what a row of a
+// list is grouped by: a site answers a dozen transcriptions of the one song
+// and they are all it.
+func Key(artist, title string) string {
+	return normalize(artist) + "/" + normalize(title)
+}
+
+// normalize strips what two catalogues disagree about: case, punctuation and
+// the remaster note a streaming service puts after a title.
+func normalize(text string) string {
+	text = strings.ToLower(text)
+
+	for _, cut := range []string{" - ", " (", " ["} {
+		if at := strings.Index(text, cut); at > 0 {
+			text = text[:at]
+		}
+	}
+
+	var out strings.Builder
+	for _, r := range text {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			out.WriteRune(r)
+		}
+	}
+
+	return out.String()
+}
+
 // Site is a place a song is read off. Search answers the rows of a list and
 // Fetch reads the page one of them names, which is the whole of what a screen
 // here asks of a site.
@@ -71,7 +102,9 @@ type Site interface {
 
 // Result is one row of a search. A site that keeps no rating and no version of
 // its own answers zero for the three numbers, and the list says nothing about
-// them rather than printing a nought.
+// them rather than printing a nought. Level is the word the site calls the
+// difficulty of that transcription, and it is empty on a site that keeps none
+// and on most rows of the one that does.
 type Result struct {
 	Artist  string
 	Title   string

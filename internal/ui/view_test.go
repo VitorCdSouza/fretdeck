@@ -70,7 +70,8 @@ func model(t *testing.T) *Model {
 	engine := practice.New(loaded)
 
 	return &Model{
-		cfg:     config.Config{Device: 1, Rate: 44100, Library: "/home/somebody/fretdeck/songs"},
+		cfg: config.Config{Device: 1, Rate: 44100, Library: "/home/somebody/fretdeck/songs",
+			Bpm: 90, Beats: 4},
 		width:   96,
 		height:  30,
 		songs:   []*song.Song{loaded},
@@ -504,48 +505,89 @@ func TestForgettingASongThatIsNotHereDoesNotAsk(t *testing.T) {
 	}
 }
 
-// TestOneLookupAnswersEveryVersionOfASong is what keeps twenty rows down to
-// one request: they are all the one song and songsterr has the one answer.
-func TestOneLookupAnswersEveryVersionOfASong(t *testing.T) {
+// TestTheDifficultyIsTheSitesOwnWord is what the level beside a row is now:
+// what the site that answered calls that transcription, carried down onto the
+// versions when the row is opened out, and nothing at all from a site that
+// keeps no difficulty.
+func TestTheDifficultyIsTheSitesOwnWord(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.focus = paneSearch
+	m.showTabs([]tabsite.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 1,
+			Rating: 5, Votes: 900, Level: "novice", URL: "one"},
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 2,
+			Level: "advanced", URL: "two"},
+		{Artist: "Nobody", Title: "No Level", Kind: tabsite.KindTab, Version: 1, URL: "three"},
+	})
+
+	if got := m.results[0].Level; got != "novice" {
+		t.Fatalf("the row is the best version and it is novice, it says %q", got)
+	}
+
+	m.found = 0
+	m.expand(0)
+
+	// the two transcriptions are not equally hard, so the version carries its
+	// own word rather than the one the row above it was drawn with
+	levels := map[int]string{}
+	for _, item := range m.results {
+		if item.Title == "Test Riff" && item.under() {
+			levels[item.Version] = item.Level
+		}
+	}
+	if levels[1] != "novice" || levels[2] != "advanced" {
+		t.Fatalf("the versions read %v, not novice then advanced", levels)
+	}
+
+	drawn := stripAnsi(m.findingRow(m.results[len(m.results)-1], false, 80))
+	if strings.Contains(drawn, "level") || strings.Contains(drawn, "novice") {
+		t.Fatalf("a row the site said nothing about was given a difficulty: %q", drawn)
+	}
+}
+
+// TestTheCursorOnTheSearchFieldPreviewsNothing is the row above the first
+// result: k off the top of the list stops on the field, which is a row of the
+// column and not a song, and the preview under it has nothing to read.
+func TestTheCursorOnTheSearchFieldPreviewsNothing(t *testing.T) {
 	m := model(t)
 	m.screen = screenMusic
 	m.focus = paneSearch
 	m.showTabs([]tabsite.Result{
 		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 1, URL: "one"},
-		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 2, URL: "two"},
-		{Artist: "Nobody", Title: "Another One", Kind: tabsite.KindTab, Version: 1, URL: "three"},
 	})
 
-	if stillLooking(m.results) != 2 {
-		t.Fatalf("both songs wait on an answer, %d do", stillLooking(m.results))
+	m.found = fieldRow
+	if _, ok := m.previewOf(); ok {
+		t.Fatal("the search field was previewed as though it were a song")
 	}
 
-	keys := map[string]bool{}
-	for _, item := range m.results {
-		keys[item.Key] = true
-	}
-	if len(keys) != 2 {
-		t.Fatalf("three transcriptions of two songs is two lookups, got %d", len(keys))
+	// the view is what caught it, since a negative row indexes the list
+	m.width, m.height = 197, 45
+	m.View()
+}
+
+// TestThePageFillsInADifficultyTheSearchLeftOut is what the preview is worth
+// beyond the tab: a row of a search usually comes back with no difficulty on
+// it and the page it names carries one.
+func TestThePageFillsInADifficultyTheSearchLeftOut(t *testing.T) {
+	m := model(t)
+	m.screen = screenMusic
+	m.focus = paneSearch
+	m.pages = map[string]*page{}
+	m.showTabs([]tabsite.Result{
+		{Artist: "Nobody", Title: "Test Riff", Kind: tabsite.KindTab, Version: 1, URL: "one"},
+	})
+
+	m.read(pageMsg{url: "one", tab: &tabsite.Tab{Level: "intermediate", Text: "e|-0-|"}})
+
+	if got := m.results[0].Level; got != "intermediate" {
+		t.Fatalf("the row says %q after the page said intermediate", got)
 	}
 
-	m.answered(lookupMsg{key: m.results[0].Key, level: 4, found: true})
-
-	// the versions are opened after the answer landed, and they take it from
-	// the row they came out of rather than asking again
-	m.found = 0
-	m.expand(0)
-
-	for _, item := range m.results {
-		if item.Title != "Test Riff" {
-			continue
-		}
-		if item.State != lookupDone || item.Level != 4 {
-			t.Fatalf("version %d did not take the answer, state %d level %d",
-				item.Version, item.State, item.Level)
-		}
-	}
-	if stillLooking(m.results) != 1 {
-		t.Fatalf("the other song is still waiting, %d rows are", stillLooking(m.results))
+	// a row closed and opened again is drawn from the versions held aside
+	if got := m.groups[m.results[0].Group][0].Level; got != "intermediate" {
+		t.Fatalf("the version kept aside says %q", got)
 	}
 }
 
@@ -780,7 +822,7 @@ func TestOnlyHAndLWalkTheScreens(t *testing.T) {
 	}
 
 	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
-	if m.screen != screenSpotify {
+	if m.screen != screenMetronome {
 		t.Fatalf("L did not walk on, the screen is %s", screenNames[m.screen])
 	}
 
@@ -802,7 +844,7 @@ func TestASongIsTheMusicScreenWithASongOnIt(t *testing.T) {
 	}
 
 	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
-	if m.screen != screenSpotify {
+	if m.screen != screenMetronome {
 		t.Fatalf("L off a song walked to %s and not on from the music button", screenNames[m.screen])
 	}
 
@@ -1179,7 +1221,7 @@ func TestTheRowUnderTheCursorIsPaintedAcross(t *testing.T) {
 	m := &Model{width: 80}
 	item := finding{Title: "Seven Nation Army", Artist: "The White Stripes",
 		From: sourceSearch, Kind: tabsite.KindTab, Version: 4,
-		Rating: 4.8, Votes: 1089, Level: 2, State: lookupDone}
+		Rating: 4.8, Votes: 1089, Level: "intermediate"}
 
 	row := m.findingRow(item, true, m.width)
 	if lipgloss.Width(row) != m.width {

@@ -17,7 +17,6 @@ import (
 	"github.com/VitorCdSouza/fretdeck/internal/config"
 	"github.com/VitorCdSouza/fretdeck/internal/practice"
 	"github.com/VitorCdSouza/fretdeck/internal/song"
-	"github.com/VitorCdSouza/fretdeck/internal/songsterr"
 	"github.com/VitorCdSouza/fretdeck/internal/tabsite"
 )
 
@@ -26,17 +25,18 @@ type screen int
 const (
 	screenMusic screen = iota
 	screenPractice
+	screenMetronome
 	screenSpotify
 	screenConfig
 )
 
-var screenNames = []string{"music", "practice", "spotify", "config"}
+var screenNames = []string{"music", "practice", "metronome", "spotify", "config"}
 
 // tabScreens is what the navigation line has a button for. The practice screen
 // is not one of them: it is a song open on the music screen, reached by opening
 // a song and left with esc or backspace, so it is drawn as that screen and the
 // line stays as short as the number of places there are to walk to.
-var tabScreens = []screen{screenMusic, screenSpotify, screenConfig}
+var tabScreens = []screen{screenMusic, screenMetronome, screenSpotify, screenConfig}
 
 // headerLines is the name, the two rows a button takes and the rule under
 // them. A click is answered by counting from it, so it is a constant and not a
@@ -120,20 +120,17 @@ type Model struct {
 	engine *practice.Engine
 	tab    *song.Tab
 
-	// the music screen, over a tab site and over what was played, with
-	// songsterr answering for the difficulty beside a row
-	// it is two lists side by side: kept is what was played, down the left, and
-	// results is what the search answered. focus is the column the keys are on
-	songsterr *songsterr.Client
-	site      tabsite.Site
-	query     string
-	kept      []finding
-	keptRow   int
-	results   []finding
-	found     int
-	focus     pane
-	seeking   bool
-	lookups   chan lookupMsg
+	// the music screen, over a tab site and over what was played. it is two
+	// lists side by side: kept is what was played, down the left, and results
+	// is what the search answered. focus is the column the keys are on
+	site    tabsite.Site
+	query   string
+	kept    []finding
+	keptRow int
+	results []finding
+	found   int
+	focus   pane
+	seeking bool
 
 	// groups holds the versions of every song a search answered, keyed the way
 	// the row on the list is. The list carries the best of each and the rest
@@ -161,6 +158,13 @@ type Model struct {
 	// refreshed is the input the list was last read again for. A worker
 	// reading something no list ever shows would otherwise ask forever
 	refreshed string
+
+	// the metronome screen, which is a beat, a bar and the switch between
+	// them and silence. clicking is the click as this side believes it to be:
+	// the count itself is the worker's, and the beat and the bar are kept in
+	// the config, since they are answers and not a state
+	clicking bool
+	metro    int
 
 	// configRow is the one cursor of the config screen. The instruments and the
 	// inputs are two lists there and it walks both, so there is no focus to keep
@@ -235,22 +239,19 @@ func NewWith(options Options) *Model {
 	}
 
 	m := &Model{
-		cfg:       cfg,
-		recent:    config.LoadRecent(),
-		worker:    bridge.NewWorker(),
-		events:    make(chan bridge.Event, 256),
-		lookups:   make(chan lookupMsg, 256),
-		songsterr: songsterr.New(),
-		site:      openSite(cfg.Site),
-		input:     input,
-		first:     first,
-		screen:    opening,
-		linked:    haveSession(),
+		cfg:    cfg,
+		recent: config.LoadRecent(),
+		worker: bridge.NewWorker(),
+		events: make(chan bridge.Event, 256),
+		site:   openSite(cfg.Site),
+		input:  input,
+		first:  first,
+		screen: opening,
+		linked: haveSession(),
 	}
 	if m.linked {
 		m.stage = stagePlaylists
 	}
-	m.songsterr.Family = m.family()
 	m.showRecent()
 
 	if options.Song != "" {
@@ -275,10 +276,10 @@ func (m *Model) openPath(path string) {
 func (m *Model) Init() tea.Cmd {
 	if err := m.worker.Start(); err != nil {
 		m.fail = err.Error()
-		return tea.Batch(m.waitWorker(), m.waitOneshot(), m.waitLookup(), m.loadSongs(), tick())
+		return tea.Batch(m.waitWorker(), m.waitOneshot(), m.loadSongs(), tick())
 	}
 
-	return tea.Batch(m.waitWorker(), m.waitOneshot(), m.waitLookup(), m.loadSongs(), tick(), m.askDevices())
+	return tea.Batch(m.waitWorker(), m.waitOneshot(), m.loadSongs(), tick(), m.askDevices())
 }
 
 // waitWorker and waitOneshot are two mouths feeding the same Update. The live
@@ -406,7 +407,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.showTabs(msg.results)
 		m.status = ""
-		return m, m.lookupSongs(m.results)
+		return m, nil
 
 	case grabMsg:
 		m.seeking = false
@@ -419,17 +420,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pageMsg:
 		m.read(msg)
 		return m, nil
-
-	case lookupMsg:
-		m.answered(msg)
-		// the sort waits for the whole playlist: half a list is not an order
-		if len(m.tracks) > 0 && stillLooking(m.tracks) == 0 {
-			m.sortByLevel()
-		}
-		if stillLooking(m.results) == 0 && stillLooking(m.tracks) == 0 {
-			m.status = ""
-		}
-		return m, m.waitLookup()
 
 	case bridgeMsg:
 		return m, m.handle(bridge.Event(msg))
@@ -532,9 +522,15 @@ func (m *Model) handle(event bridge.Event) tea.Cmd {
 		m.pulling = false
 		m.fail = event.Message
 
+	case bridge.EventClickError:
+		// the click has nothing to play it on, and the worker stops asking
+		m.stopClick()
+		m.fail = event.Message
+
 	case bridge.EventWorkerGone:
 		m.listing = false
 		m.devices = nil
+		m.stopClick()
 		m.fail = event.Message + ". press r on the config screen to start it again"
 
 	case bridge.EventSpotifyReady:
@@ -685,14 +681,6 @@ func (m *Model) instrument() song.Instrument {
 	return song.Chosen(m.cfg.Instrument)
 }
 
-// family is the half of the songsterr catalogue that answers for it.
-func (m *Model) family() songsterr.Family {
-	if m.instrument().Bass {
-		return songsterr.Bass
-	}
-	return songsterr.Guitar
-}
-
 func (m *Model) deviceName() string {
 	for _, device := range m.devices {
 		if m.chosen(device) {
@@ -746,6 +734,8 @@ func (m *Model) View() string {
 		body = m.viewSpotify()
 	case screenPractice:
 		body = m.viewPractice()
+	case screenMetronome:
+		body = m.viewMetronome()
 	case screenConfig:
 		body = m.viewConfig()
 	}

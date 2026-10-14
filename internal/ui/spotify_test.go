@@ -3,8 +3,6 @@ package ui
 import (
 	"strings"
 	"testing"
-
-	"github.com/VitorCdSouza/fretdeck/internal/songsterr"
 )
 
 // TestTheSpotifyScreenIsOneButtonUntilThereIsASession is the whole of the
@@ -33,38 +31,6 @@ func TestTheSpotifyScreenIsOneButtonUntilThereIsASession(t *testing.T) {
 
 	if m.keySpotify("enter") == nil || !m.pulling {
 		t.Fatal("enter has to start the login and say it is waiting")
-	}
-}
-
-// TestAPlaylistIsSortedEasiestFirst is the question somebody brings a playlist
-// here to ask. What songsterr could not match sinks to the bottom, since a
-// blank means not found and not easy.
-func TestAPlaylistIsSortedEasiestFirst(t *testing.T) {
-	m := model(t)
-	m.linked = true
-	m.screen = screenSpotify
-
-	m.showTracks([]spotifyTrack{
-		{Artist: "Nobody", Title: "Hard One"},
-		{Artist: "Nobody", Title: "Unknown One"},
-		{Artist: "Nobody", Title: "Easy One"},
-	})
-
-	levels := map[string]int{"Hard One": 7, "Easy One": 2}
-	for _, item := range m.tracks {
-		level, known := levels[item.Title]
-		m.Update(lookupMsg{key: item.Key, level: level, found: known})
-	}
-
-	order := []string{}
-	for _, item := range m.tracks {
-		order = append(order, item.Title)
-	}
-	want := []string{"Easy One", "Hard One", "Unknown One"}
-	for index := range want {
-		if order[index] != want[index] {
-			t.Fatalf("the playlist is sorted %v, easiest first is %v", order, want)
-		}
 	}
 }
 
@@ -156,25 +122,6 @@ func TestTheLoginIsClickable(t *testing.T) {
 	m.mouse(click(6, m.clicks[0].top))
 	if !m.pulling {
 		t.Fatal("clicking the button did not start the login")
-	}
-}
-
-// TestChangingTheInstrumentAsksAgain is what the number beside a row means: it
-// is the difficulty of the instrument being played, not of the song.
-func TestChangingTheInstrumentAsksAgain(t *testing.T) {
-	m := model(t)
-	m.linked = true
-	m.songsterr = songsterr.New()
-	m.tracks = []finding{{From: sourceTracks, Artist: "Nobody", Title: "Test Riff",
-		Key: "nobody test riff", State: lookupDone, Level: 3}}
-
-	m.screen = screenConfig
-	m.configRow = 2
-	if cmd := m.keepConfig(); cmd == nil {
-		t.Fatal("the playlist has to be looked up again for the new instrument")
-	}
-	if m.tracks[0].State != lookupWaiting {
-		t.Fatalf("the row kept the level of the other instrument, state %d", m.tracks[0].State)
 	}
 }
 
